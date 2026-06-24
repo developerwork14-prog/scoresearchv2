@@ -1,0 +1,25 @@
+{
+  "name": "@aiva/core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node test/audit-outcome.test.mjs && node test/structured-data-audit.test.mjs && node test/geo-aeo-accuracy.test.mjs && node test/eeat-audit.test.mjs && node test/indexability-audit.test.mjs && node test/on-page-seo.test.mjs && node test/image-seo.test.mjs && node test/viewport-meta.test.mjs && node test/sitemap-crawler.test.mjs && node test/security-https.test.mjs && node test/trust-signals.test.mjs"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "ai-visibility-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Business-focused AI visibility scoring SaaS platform.",
+  "scripts": {
+    "dev": "npm run build -w @aiva/core && concurrently \"npm run dev -w @aiva/api\" \"npm run dev -w @aiva/web\"",
+    "build": "npm run build -w @aiva/core && npm run build -w @aiva/api && npm run build -w @aiva/web",
+    "lint": "npm run lint -w @aiva/web",
+    "typecheck": "npm run build -w @aiva/core && npm run typecheck -w @aiva/api && npm run typecheck -w @aiva/web"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "puppeteer": "^25.1.0"
+  }
+}
