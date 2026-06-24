@@ -75,6 +75,14 @@ function redactedMongoUri() {
   }
 }
 
+function memoryFallbackAllowed() {
+  return process.env.NODE_ENV !== "production" && process.env.VERCEL_ENV !== "production";
+}
+
+function persistenceUnavailableMessage() {
+  return `Persistent report storage is unavailable. Configure MONGODB_URI for production. Last MongoDB error: ${globalThis.aivaMongoLastError ?? "not connected"}`;
+}
+
 export async function reportStoreHealth() {
   const db = await database();
   if (!db) {
@@ -102,6 +110,7 @@ export const reportStore = {
   async save(report: AiVisibilityReport) {
     const db = await database();
     if (!db) {
+      if (!memoryFallbackAllowed()) throw new Error(persistenceUnavailableMessage());
       memoryReports.set(report.id, report);
       return report;
     }
@@ -121,6 +130,7 @@ export const reportStore = {
       }
     } catch (error) {
       console.error("MongoDB report save failed; using memory fallback", error);
+      if (!memoryFallbackAllowed()) throw error;
       memoryReports.set(report.id, report);
     }
     return report;
