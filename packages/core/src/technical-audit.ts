@@ -1932,10 +1932,6 @@ function pass(def: CheckDefinition, passed: boolean, evidence: string, warning =
     passed: skipped ? true : passed,
     skipped: skipped || undefined,
     warning: !skipped && (warning || undefined),
-    ...(!skipped && !passed && def.severity === "ADVISORY" ? {
-      informational: true,
-      opportunity: crawlabilityRecommendation(def.id)
-    } : {}),
     evidence,
     issueSummary: skipped ? undefined : technicalIssueSummary(def.id, passed, evidence),
     whatIsWrong: skipped || passed ? undefined : technicalFailureDescription(def.id, evidence),

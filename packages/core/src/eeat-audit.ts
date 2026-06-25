@@ -295,113 +295,156 @@ export async function runEeatAudit(inputUrl: string, html?: string): Promise<Eea
   });
   add(2, {
     passed: articleApplicable && Boolean(bioLink),
-    skipped: !articleApplicable || !bioLink,
+    skipped: !articleApplicable,
     notApplicable: !articleApplicable,
     evidence: !articleApplicable
       ? skippedEvidence("Byline links are checked only on actual article or blog-detail pages")
       : !bioLink
-        ? skippedEvidence("Optional author-profile reinforcement: no verified bio link was detected")
+        ? pageEvidence(articleUrl, true, { reason: "No public author bio/profile link was detected from the article byline." })
         : pageEvidence(articleUrl, false, { bioLink: bioLink.href })
   });
   add(3, {
-    passed: Boolean(bioPage?.html),
-    skipped: !bioLink,
+    passed: articleApplicable && Boolean(bioLink && bioPage?.html),
+    skipped: !articleApplicable,
     notApplicable: !articleApplicable,
-    evidence: !bioLink
-      ? skippedEvidence("Author bio-page checks require a detected byline profile link")
-      : pageEvidence(articleUrl, !bioPage?.html, { bioUrl: bioLink.href, status: bioPage?.status ?? 0 }),
+    evidence: !articleApplicable
+      ? skippedEvidence("Author bio-page checks apply only to actual article or blog-detail pages")
+      : !bioLink
+        ? pageEvidence(articleUrl, true, { reason: "No author bio/profile link was detected to verify." })
+        : pageEvidence(articleUrl, !bioPage?.html, { bioUrl: bioLink.href, status: bioPage?.status ?? 0 }),
     recommendation: "Repair the affected author-profile link so it opens a public bio page."
   });
   add(4, {
-    passed: wordCount(bioText) >= 150,
-    skipped: !bioPage?.html,
+    passed: articleApplicable && Boolean(bioPage?.html) && wordCount(bioText) >= 150,
+    skipped: !articleApplicable,
     notApplicable: !articleApplicable,
     warning: Boolean(bioPage?.html) && wordCount(bioText) < 150,
     priorityScore: 15,
-    evidence: !bioPage?.html
-      ? skippedEvidence("Bio depth is checked only when a public author bio page exists")
+    evidence: !articleApplicable
+      ? skippedEvidence("Bio depth is checked only on actual article or blog-detail pages")
+      : !bioPage?.html
+        ? pageEvidence(articleUrl, true, { reason: "No public author bio page was available for depth verification." })
       : pageEvidence(bioPage.url, wordCount(bioText) < 150, { words: wordCount(bioText) }),
     recommendation: "Expand the author bio only with accurate qualifications, role, and relevant experience."
   });
-  add(5, { passed: true, skipped: !bioPage?.html || bio$("a[href*='linkedin.com']").length === 0, notApplicable: !articleApplicable, evidence: skippedEvidence("LinkedIn is optional; add it only when a verified author profile exists", { linkedinLinks: bio$("a[href*='linkedin.com']").length }) });
-  add(6, { passed: true, skipped: !bioPage?.html || bio$("a[href*='/blog'],a[href*='/article'],a[href*='/news'],a[href*='/insight']").length < 3, notApplicable: !articleApplicable, evidence: skippedEvidence("Author content-volume links are optional and require a public author archive") });
-  add(21, { passed: true, skipped: !bioPage?.html || !/\b\d+\+?\s+(years?|yrs?)\b|\b(since|experience)\s+\d{4}\b/i.test(bioText), notApplicable: !articleApplicable, evidence: skippedEvidence("Quantified experience is optional and should be added only when accurate") });
+  add(5, {
+    passed: articleApplicable && Boolean(bioPage?.html) && bio$("a[href*='linkedin.com']").length > 0,
+    skipped: !articleApplicable,
+    notApplicable: !articleApplicable,
+    warning: articleApplicable,
+    evidence: !articleApplicable
+      ? skippedEvidence("LinkedIn profile checks apply only when an article author is detected")
+      : pageEvidence(bioLink?.href ?? articleUrl, !(bioPage?.html && bio$("a[href*='linkedin.com']").length > 0), { linkedinLinks: bio$("a[href*='linkedin.com']").length })
+  });
+  add(6, {
+    passed: articleApplicable && Boolean(bioPage?.html) && bio$("a[href*='/blog'],a[href*='/article'],a[href*='/news'],a[href*='/insight']").length >= 3,
+    skipped: !articleApplicable,
+    notApplicable: !articleApplicable,
+    warning: articleApplicable,
+    evidence: !articleApplicable
+      ? skippedEvidence("Author archive checks apply only when an article author is detected")
+      : pageEvidence(bioLink?.href ?? articleUrl, !(bioPage?.html && bio$("a[href*='/blog'],a[href*='/article'],a[href*='/news'],a[href*='/insight']").length >= 3), { contentLinks: bio$("a[href*='/blog'],a[href*='/article'],a[href*='/news'],a[href*='/insight']").length })
+  });
+  add(21, {
+    passed: articleApplicable && Boolean(bioPage?.html) && /\b\d+\+?\s+(years?|yrs?)\b|\b(since|experience)\s+\d{4}\b/i.test(bioText),
+    skipped: !articleApplicable,
+    notApplicable: !articleApplicable,
+    warning: articleApplicable,
+    evidence: !articleApplicable
+      ? skippedEvidence("Quantified experience checks apply only when an article author is detected")
+      : pageEvidence(bioLink?.href ?? articleUrl, !(bioPage?.html && /\b\d+\+?\s+(years?|yrs?)\b|\b(since|experience)\s+\d{4}\b/i.test(bioText)), { words: wordCount(bioText) })
+  });
 
   add(7, {
     passed: Boolean(pageFor("editorial")) && wordCount(cheerio.load(pageFor("editorial"))("body").text()) >= 100,
-    skipped: !articleApplicable || !pageFor("editorial"),
+    skipped: !articleApplicable,
     notApplicable: !articleApplicable,
     evidence: !articleApplicable
       ? skippedEvidence("Editorial-policy checks apply only to article-led publishers")
-      : skippedEvidence("Editorial policy is an optional publisher trust signal")
+      : pageEvidence(links.editorial?.href ?? normalized, !pageFor("editorial") || wordCount(cheerio.load(pageFor("editorial"))("body").text()) < 100, {
+        reason: !pageFor("editorial") ? "No editorial, fact-check, correction, or review-policy page was detected." : undefined,
+        words: wordCount(cheerio.load(pageFor("editorial"))("body").text())
+      })
   });
-  add(8, { passed: addressFound(contactText), skipped: !localIntent, warning: localIntent && hasContactLink, evidence: { contactUrl: links.contact?.href ?? "", localIntent } });
-  add(9, { passed: phoneFound(contactText), skipped: !localIntent && emailFound(contactText), warning: hasContactLink, evidence: { contactUrl: links.contact?.href ?? "", localIntent } });
+  add(8, {
+    passed: addressFound(contactText),
+    warning: hasContactLink,
+    evidence: pageEvidence(links.contact?.href ?? normalized, !addressFound(contactText), { contactUrl: links.contact?.href ?? "", localIntent, reason: contactText ? undefined : "No contact page text was available." })
+  });
+  add(9, {
+    passed: phoneFound(contactText),
+    warning: hasContactLink && !phoneFound(contactText),
+    evidence: pageEvidence(links.contact?.href ?? normalized, !phoneFound(contactText), { contactUrl: links.contact?.href ?? "", localIntent, reason: contactText ? undefined : "No contact page text was available." })
+  });
   add(10, {
     passed: emailFound(contactText),
-    skipped: !hasContactLink || (!emailFound(contactText) && phoneFound(contactText)),
     warning: hasContactLink && !emailFound(contactText) && !phoneFound(contactText),
     priorityScore: 15,
     evidence: !hasContactLink
-      ? skippedEvidence("No contact page was available for company-email analysis")
-      : !emailFound(contactText) && phoneFound(contactText)
-        ? skippedEvidence("A company email is optional when a working phone or contact channel is provided")
-        : pageEvidence(links.contact?.href ?? normalized, !emailFound(contactText))
+      ? pageEvidence(normalized, true, { reason: "No contact page was available for company-email analysis." })
+      : pageEvidence(links.contact?.href ?? normalized, !emailFound(contactText), { phoneDetected: phoneFound(contactText) })
   });
   add(11, { skipped: true, evidence: { reason: "Form functionality cannot be verified with 100% accuracy without submitting a form." } });
   add(12, {
     passed: wordCount(privacyText) >= 120,
-    skipped: !links.privacy || !pageFor("privacy"),
     evidence: !links.privacy
       ? pageEvidence(normalized, true, { reason: "No privacy-policy link was detected" })
       : !pageFor("privacy")
-        ? skippedEvidence("Privacy-policy page could not be retrieved for substantive-content verification", { privacyUrl: links.privacy.href })
+        ? pageEvidence(links.privacy.href, true, { reason: "Privacy-policy page could not be retrieved for substantive-content verification", privacyUrl: links.privacy.href })
         : pageEvidence(links.privacy.href, wordCount(privacyText) < 120, { words: wordCount(privacyText) }),
     recommendation: "Publish or repair a readable privacy policy describing data collection, use, retention, and contact rights."
   });
   add(13, {
     passed: Boolean(pageFor("terms")) && wordCount(termsText) >= 100,
-    skipped: !links.terms || !pageFor("terms"),
     evidence: !links.terms
       ? pageEvidence(normalized, true, { reason: "No terms link was detected" })
       : !pageFor("terms")
-        ? skippedEvidence("Terms page could not be retrieved for content verification", { termsUrl: links.terms.href })
+        ? pageEvidence(links.terms.href, true, { reason: "Terms page could not be retrieved for content verification", termsUrl: links.terms.href })
         : pageEvidence(links.terms.href, wordCount(termsText) < 100, { words: wordCount(termsText) }),
     recommendation: "Publish or repair clear terms and conditions for the service."
   });
   add(15, {
     passed: wordCount(aboutText) >= 120,
-    skipped: !pageFor("about"),
-    notApplicable: !pageFor("about"),
     warning: Boolean(pageFor("about")) && wordCount(aboutText) < 120,
     priorityScore: 15,
     evidence: !pageFor("about")
-      ? skippedEvidence("About-page depth is checked only when an About page is detected")
+      ? pageEvidence(links.about?.href ?? normalized, true, { reason: "No readable About page was detected." })
       : pageEvidence(links.about?.href ?? normalized, wordCount(aboutText) < 120, { words: wordCount(aboutText) }),
     recommendation: "Describe the company, ownership, purpose, and relevant expertise accurately on the About page."
   });
   add(20, {
     passed: Boolean(pageFor("team")) && (team$("img").length >= 2 || team$("a[href*='linkedin.com']").length >= 2 || (teamText.match(/\b(CEO|Founder|Director|Manager|Lead|Head of)\b/g) ?? []).length >= 2),
-    skipped: !pageFor("team"),
-    notApplicable: !pageFor("team"),
-    warning: Boolean(pageFor("team")),
+    warning: true,
     evidence: !pageFor("team")
-      ? skippedEvidence("Team-page completeness is checked only when a Team or Leadership page is detected")
-      : pageEvidence(links.team?.href ?? normalized, false, { teamUrl: links.team?.href ?? "" })
+      ? pageEvidence(links.team?.href ?? normalized, true, { reason: "No Team, People, Leadership, or Authors page was detected." })
+      : pageEvidence(links.team?.href ?? normalized, !(team$("img").length >= 2 || team$("a[href*='linkedin.com']").length >= 2 || (teamText.match(/\b(CEO|Founder|Director|Manager|Lead|Head of)\b/g) ?? []).length >= 2), { teamUrl: links.team?.href ?? "" })
   });
 
-  add(14, { passed: /trusted by|clients|customers|partners|featured in/i.test(homepage) && $("img[alt]").length >= 2, skipped: !/clients|customers|partners|featured in|trusted by|case stud/i.test(homepage), warning: /trusted by|clients|customers|partners|featured in/i.test(homepage), evidence: { logoImages: $("img[alt]").length } });
-  add(16, { passed: true, skipped: !articleApplicable || authorityLinks.length === 0, notApplicable: !articleApplicable, evidence: skippedEvidence(!articleApplicable ? "Authority-link checks run only on informational article or research pages" : ".edu and .gov links are optional; cite the most relevant authoritative source regardless of domain", { authorityLinks: authorityLinks.slice(0, 10), outboundLinks: outboundLinks.length }) });
-  add(17, { passed: articleApplicable && sourceCitations > 0, skipped: !articleApplicable || sourceCitations === 0, notApplicable: !articleApplicable, evidence: skippedEvidence(!articleApplicable ? "Inline citation checks run only on informational article or research pages" : "No claim requiring a validated inline source was established from the sampled page", { sourceCitations, articleDetected: articleApplicable }) });
+  add(14, { passed: /trusted by|clients|customers|partners|featured in/i.test(homepage) && $("img[alt]").length >= 2, warning: true, evidence: pageEvidence(normalized, !(/trusted by|clients|customers|partners|featured in/i.test(homepage) && $("img[alt]").length >= 2), { logoImages: $("img[alt]").length, trustSectionDetected: /clients|customers|partners|featured in|trusted by|case stud/i.test(homepage) }) });
+  add(16, {
+    passed: articleApplicable && authorityLinks.length > 0,
+    skipped: !articleApplicable,
+    notApplicable: !articleApplicable,
+    warning: articleApplicable,
+    evidence: !articleApplicable
+      ? skippedEvidence("Authority-link checks run only on informational article or research pages")
+      : pageEvidence(articleUrl, authorityLinks.length === 0, { authorityLinks: authorityLinks.slice(0, 10), outboundLinks: outboundLinks.length })
+  });
+  add(17, {
+    passed: articleApplicable && sourceCitations > 0,
+    skipped: !articleApplicable,
+    notApplicable: !articleApplicable,
+    evidence: !articleApplicable
+      ? skippedEvidence("Inline citation checks run only on informational article or research pages")
+      : pageEvidence(articleUrl, sourceCitations === 0, { sourceCitations, articleDetected: articleApplicable })
+  });
   add(18, { skipped: true, evidence: { reason: "Verifiable claim ratio requires claim extraction and source validation; static HTML alone cannot verify it exactly." } });
   add(19, {
     passed: Boolean(pageFor("caseStudy")) && /\b\d+(?:\.\d+)?%|\b\d+x\b|\bROI\b|\brevenue\b|\bsaved\b/i.test(caseText),
-    skipped: !pageFor("caseStudy"),
-    notApplicable: !pageFor("caseStudy"),
-    warning: Boolean(pageFor("caseStudy")) && !/\b\d+(?:\.\d+)?%|\b\d+x\b|\bROI\b|\brevenue\b|\bsaved\b/i.test(caseText),
+    warning: true,
     priorityScore: 15,
     evidence: !pageFor("caseStudy")
-      ? skippedEvidence("Case studies are optional and no case-study page was detected")
+      ? pageEvidence(links.caseStudy?.href ?? normalized, true, { reason: "No case-study, results, customer-story, or success-story page was detected." })
       : pageEvidence(links.caseStudy?.href ?? normalized, !/\b\d+(?:\.\d+)?%|\b\d+x\b|\bROI\b|\brevenue\b|\bsaved\b/i.test(caseText)),
     recommendation: "Add metrics only to genuine case studies when outcomes can be substantiated."
   });

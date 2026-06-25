@@ -545,7 +545,7 @@ export async function generateVisibilityReport(input: ReportInput, origin = "htt
     "GEO / AEO audit"
   ));
   const indexabilityAuditPromise = htmlContentPromise.then((html) => withAuditTimeout(
-    runIndexabilityAudit(normalizedUrl, html),
+    runIndexabilityAudit(normalizedUrl, html, { googleSearchConsole: input.googleSearchConsole }),
     45000,
     fallbackIndexabilityAudit("Indexability audit timed out"),
     "Indexability audit"

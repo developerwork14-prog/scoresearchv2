@@ -97,8 +97,9 @@ assert.equal(modern.recommendation.overallAiVisibilityImpact.level, "Low");
 assert.equal(modern.recommendation.estimatedFixScope.level, "Infrastructure-level fix");
 
 const lazy = check("Native Lazy Loading (Not JS)");
-assert.equal(lazy.informational, true);
-assert.match(lazy.opportunity, /Optional image optimization/);
+assert.equal(lazy.informational, undefined);
+assert.equal(lazy.opportunity, undefined);
+assert.equal(lazy.warning, true);
 assert.equal(lazy.evidence.affectedPages[0].sampleEvidence.eligibleBelowFoldImages, 1);
 assert.equal(lazy.evidence.affectedPages[0].sampleEvidence.missingNativeLazy, 1);
 assert.doesNotMatch(lazy.recommendation.howToFix, /alt text/i);
@@ -123,7 +124,9 @@ assert.doesNotMatch(svg.recommendation.howToFix, /meta description|title tag/i);
 assert.ok(svg.recommendation.priorityScore >= 30 && svg.recommendation.priorityScore <= 60);
 
 const imageObject = check("ImageObject Schema");
-assert.equal(imageObject.informational, true);
+assert.equal(imageObject.informational, undefined);
+assert.equal(imageObject.opportunity, undefined);
+assert.equal(imageObject.warning, true);
 assert.equal(imageObject.evidence.affectedPages[0].sampleEvidence.meaningfulContentImages, 3);
 assert.match(imageObject.recommendation.whatIsWrong, /2 content pages/);
 assert.equal(imageObject.recommendation.validationSummary.pagesAffected, 2);

@@ -85,6 +85,48 @@ try {
     assert.ok(Number(item.evidence.pagesFailed) > 0);
     assert.ok(Array.isArray(item.evidence.affectedPages) && item.evidence.affectedPages.some((page) => page.url));
   }
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = String(input);
+    if (requestUrl === "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect") {
+      assert.equal(init?.method, "POST");
+      assert.equal(init?.headers?.authorization, "Bearer test-token");
+      assert.deepEqual(JSON.parse(String(init?.body)), {
+        inspectionUrl: "https://example.com/",
+        siteUrl: "sc-domain:example.com",
+        languageCode: "en-US"
+      });
+      return new Response(JSON.stringify({
+        inspectionResult: {
+          indexStatusResult: {
+            verdict: "PASS",
+            coverageState: "Submitted and indexed",
+            indexingState: "INDEXING_ALLOWED",
+            robotsTxtState: "ALLOWED",
+            pageFetchState: "SUCCESSFUL"
+          }
+        }
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  };
+  try {
+    const gscAudit = await runIndexabilityAudit(origin, undefined, {
+      googleSearchConsole: {
+        accessToken: "test-token",
+        siteUrl: "sc-domain:example.com",
+        inspectionUrl: "https://example.com/"
+      }
+    });
+    const googleIndex = check(gscAudit, 2);
+    assert.equal(googleIndex.passed, true);
+    assert.equal(googleIndex.skipped, false);
+    assert.equal(googleIndex.evidence.siteUrl, "sc-domain:example.com");
+    assert.equal(googleIndex.evidence.verdict, "PASS");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 } finally {
   await new Promise((resolve) => server.close(resolve));
 }

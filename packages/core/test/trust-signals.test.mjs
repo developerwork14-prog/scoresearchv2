@@ -47,8 +47,11 @@ try {
   const audit = await runTrustSignalsAudit(origin, undefined, "Acme", "");
 
   for (const id of [1, 2, 3, 5, 9]) {
-    assert.equal(check(audit, id).skipped, true, `NAP comparison check ${id} should skip without schema comparison data`);
-    assert.match(check(audit, id).evidence.reason, /Insufficient evidence/i);
+    const item = check(audit, id);
+    assert.equal(item.passed, false, `NAP comparison check ${id} should surface missing schema/contact parity evidence`);
+    assert.equal(item.skipped, false);
+    assert.ok(Number(item.evidence.pagesChecked) > 0);
+    assert.ok(Number(item.evidence.pagesFailed) > 0);
   }
 
   const email = check(audit, 4);
@@ -68,8 +71,9 @@ try {
   assert.ok(registration.priorityScore <= 20);
 
   const privacyRecency = check(audit, 15);
-  assert.equal(privacyRecency.skipped, true);
-  assert.equal(privacyRecency.evidence.reason, "Unable to verify policy update date.");
+  assert.equal(privacyRecency.passed, false);
+  assert.equal(privacyRecency.skipped, false);
+  assert.match(privacyRecency.evidence.reason, /No visible last-updated or effective date/i);
 
   const dateParity = check(audit, 10);
   assert.equal(dateParity.skipped, true);

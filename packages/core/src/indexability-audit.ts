@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import { scoreParameterOutcomes, statusForParameterOutcomes } from "./audit-outcome.js";
 import { fetchSitemapUrls } from "./site-crawler.js";
+import type { GoogleSearchConsoleContext } from "./types.js";
 
 export type IndexabilitySeverity = "Critical" | "High" | "Medium" | "Low";
 export type IndexabilityStatus = "Passed" | "Minor Attention" | "Needs Attention" | "Skipped";
@@ -342,8 +343,9 @@ function infiniteScrollEvidence(html: string, $: cheerio.CheerioAPI, pagination:
   };
 }
 
-async function searchIndexEvidence(engine: "google" | "bing", hostname: string) {
-  const envKey = engine === "google" ? "GSC_ACCESS_TOKEN" : "BING_WEBMASTER_API_KEY";
+async function searchIndexEvidence(engine: "google" | "bing", hostname: string, googleSearchConsole?: GoogleSearchConsoleContext) {
+  if (engine === "google") return googleUrlInspectionEvidence(hostname, googleSearchConsole);
+  const envKey = "BING_WEBMASTER_API_KEY";
   return {
     skipped: true,
     reason: process.env[envKey]
@@ -353,9 +355,88 @@ async function searchIndexEvidence(engine: "google" | "bing", hostname: string) 
   };
 }
 
-function gscCoverageEvidence() {
-  if (!process.env.GSC_ACCESS_TOKEN) return { skipped: true, reason: "Search Console not connected" };
-  return { skipped: true, reason: "Search Console coverage API integration pending" };
+function gscSiteUrlFor(hostname: string, googleSearchConsole?: GoogleSearchConsoleContext) {
+  if (googleSearchConsole?.siteUrl) return googleSearchConsole.siteUrl;
+  return `sc-domain:${hostname.replace(/^www\./, "")}`;
+}
+
+function googleIndexPass(indexStatusResult: Record<string, unknown>) {
+  const verdict = String(indexStatusResult.verdict ?? "");
+  const coverageState = String(indexStatusResult.coverageState ?? "");
+  const indexingState = String(indexStatusResult.indexingState ?? "");
+  return verdict === "PASS"
+    || indexingState === "INDEXING_ALLOWED" && /indexed|submitted and indexed/i.test(coverageState);
+}
+
+async function googleUrlInspectionEvidence(hostname: string, googleSearchConsole?: GoogleSearchConsoleContext) {
+  const accessToken = (googleSearchConsole?.accessToken || "").trim();
+  const inspectionUrl = (googleSearchConsole?.inspectionUrl || "").trim();
+  const siteUrl = gscSiteUrlFor(hostname, googleSearchConsole);
+  if (!accessToken) {
+    return {
+      skipped: true,
+      reason: "Connect Google Search Console with Google OAuth to verify index status",
+      requiredEnv: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI"],
+      hostname
+    };
+  }
+  const targetUrl = inspectionUrl || `https://${hostname}/`;
+  try {
+    const response = await fetch("https://searchconsole.googleapis.com/v1/urlInspection/index:inspect", {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+        accept: "application/json"
+      },
+      body: JSON.stringify({
+        inspectionUrl: targetUrl,
+        siteUrl,
+        languageCode: "en-US"
+      })
+    });
+    const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const inspectionResult = data.inspectionResult && typeof data.inspectionResult === "object"
+      ? data.inspectionResult as Record<string, unknown>
+      : {};
+    const indexStatusResult = inspectionResult.indexStatusResult && typeof inspectionResult.indexStatusResult === "object"
+      ? inspectionResult.indexStatusResult as Record<string, unknown>
+      : {};
+    const pass = response.ok && googleIndexPass(indexStatusResult);
+    return {
+      pass,
+      pagesChecked: 1,
+      pagesFailed: pass ? 0 : 1,
+      affectedPages: pass ? [] : [{ url: targetUrl, issueCount: 1 }],
+      inspectionUrl: targetUrl,
+      siteUrl,
+      status: response.status,
+      verdict: indexStatusResult.verdict ?? "",
+      coverageState: indexStatusResult.coverageState ?? "",
+      indexingState: indexStatusResult.indexingState ?? "",
+      robotsTxtState: indexStatusResult.robotsTxtState ?? "",
+      pageFetchState: indexStatusResult.pageFetchState ?? "",
+      googleCanonical: indexStatusResult.googleCanonical ?? "",
+      userCanonical: indexStatusResult.userCanonical ?? "",
+      lastCrawlTime: indexStatusResult.lastCrawlTime ?? "",
+      ...(response.ok ? {} : { error: data.error ?? data })
+    };
+  } catch (error) {
+    return {
+      skipped: true,
+      reason: "Google URL Inspection API request failed in this crawl environment",
+      inspectionUrl: targetUrl,
+      siteUrl,
+      hostname,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+function gscCoverageEvidence(googleSearchConsole?: GoogleSearchConsoleContext) {
+  if (!googleSearchConsole?.accessToken) return { skipped: true, reason: "Connect Google Search Console with Google OAuth to verify coverage signals" };
+  return { skipped: true, reason: "Search Console connected; Google does not expose the full Coverage report through this audit path. URL Inspection is used for Google Index Verified." };
 }
 
 function categorySummaries(checks: IndexabilityCheckResult[]): IndexabilityCategorySummary[] {
@@ -397,7 +478,7 @@ function resultFor(id: number, evidence: Record<string, unknown>): IndexabilityC
   };
 }
 
-export async function runIndexabilityAudit(inputUrl: string, html?: string): Promise<IndexabilityAuditResult> {
+export async function runIndexabilityAudit(inputUrl: string, html?: string, options: { googleSearchConsole?: GoogleSearchConsoleContext } = {}): Promise<IndexabilityAuditResult> {
   const normalizedUrl = normalizeUrl(inputUrl);
   const url = new URL(normalizedUrl);
   const serverPage = html ? { text: html, response: null as Response | null } : await fetchText(normalizedUrl).catch(() => ({ text: "", response: null as Response | null }));
@@ -426,7 +507,7 @@ export async function runIndexabilityAudit(inputUrl: string, html?: string): Pro
   });
   const pagination = paginationEvidence($, canonicalUrl);
   const [googleIndex, bingIndex, soft404, httpHttps, wwwVariant] = await Promise.all([
-    searchIndexEvidence("google", url.hostname),
+    searchIndexEvidence("google", url.hostname, options.googleSearchConsole),
     searchIndexEvidence("bing", url.hostname),
     soft404Evidence(url),
     httpToHttpsEvidence(url),
@@ -436,7 +517,7 @@ export async function runIndexabilityAudit(inputUrl: string, html?: string): Pro
     resultFor(1, { pass: !noindexFoundIn(pageHtml, serverPage.response), directives: robotsDirectives(pageHtml, serverPage.response) }),
     resultFor(2, googleIndex),
     resultFor(3, bingIndex),
-    resultFor(4, gscCoverageEvidence()),
+    resultFor(4, gscCoverageEvidence(options.googleSearchConsole)),
     resultFor(5, { pass: !canonicalTarget || !noindexFoundIn(canonicalTarget.text, canonicalTarget.response), canonicalUrl, targetNoindex: Boolean(canonicalTarget && noindexFoundIn(canonicalTarget.text, canonicalTarget.response)) }),
     resultFor(6, { pass: sitemapSamples.every((sample) => !sample.noindex && !sample.canonicalNoindex), checked: sitemapSamples.length, noindexedUrls: sitemapSamples.filter((sample) => sample.noindex || sample.canonicalNoindex).slice(0, 10) }),
     resultFor(7, { pass: Boolean(canonicalUrl && comparableUrl(canonicalUrl) === comparableUrl(normalizedUrl)), canonicalUrl, pageUrl: normalizedUrl }),

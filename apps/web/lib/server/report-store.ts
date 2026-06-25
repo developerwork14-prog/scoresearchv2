@@ -22,17 +22,30 @@ interface InsightSubscription {
   createdAt: string;
 }
 
+interface GoogleSearchConsoleConnection {
+  id: string;
+  email?: string;
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt: number;
+  sites: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 declare global {
   var aivaMongoClientPromise: Promise<MongoClient> | undefined;
   var aivaMemoryReports: Map<string, AiVisibilityReport> | undefined;
   var aivaMemoryLeads: StrategyLead[] | undefined;
   var aivaInsightSubscriptions: InsightSubscription[] | undefined;
+  var aivaGoogleSearchConsoleConnections: GoogleSearchConsoleConnection[] | undefined;
   var aivaMongoLastError: string | undefined;
 }
 
 const memoryReports = globalThis.aivaMemoryReports ??= new Map<string, AiVisibilityReport>();
 const memoryLeads = globalThis.aivaMemoryLeads ??= [];
 const memorySubscriptions = globalThis.aivaInsightSubscriptions ??= [];
+const memoryGoogleSearchConsoleConnections = globalThis.aivaGoogleSearchConsoleConnections ??= [];
 
 function mongoClient() {
   loadServerEnv();
@@ -192,5 +205,45 @@ export const reportStore = {
       }
     }
     return subscription;
+  },
+
+  async saveGoogleSearchConsoleConnection(connection: GoogleSearchConsoleConnection) {
+    const db = await database();
+    if (!db) {
+      const existingIndex = memoryGoogleSearchConsoleConnections.findIndex((item) => item.id === connection.id);
+      if (existingIndex >= 0) {
+        memoryGoogleSearchConsoleConnections[existingIndex] = connection;
+      } else {
+        memoryGoogleSearchConsoleConnections.push(connection);
+      }
+      return connection;
+    }
+
+    await db.collection<GoogleSearchConsoleConnection>("google_search_console_connections").replaceOne(
+      { id: connection.id },
+      connection,
+      { upsert: true }
+    );
+    return connection;
+  },
+
+  async getGoogleSearchConsoleConnectionForHost(hostname: string) {
+    const normalized = hostname.replace(/^www\./, "").toLowerCase();
+    const matchesHost = (connection: GoogleSearchConsoleConnection) => connection.sites.some((siteUrl) => {
+      if (siteUrl.startsWith("sc-domain:")) return siteUrl.slice("sc-domain:".length).replace(/^www\./, "").toLowerCase() === normalized;
+      try {
+        return new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase() === normalized;
+      } catch {
+        return false;
+      }
+    });
+    const db = await database();
+    if (!db) return memoryGoogleSearchConsoleConnections.find(matchesHost) ?? null;
+
+    const candidates = await db.collection<GoogleSearchConsoleConnection>("google_search_console_connections")
+      .find({}, { projection: { _id: 0 } })
+      .sort({ updatedAt: -1 })
+      .toArray();
+    return candidates.find(matchesHost) ?? null;
   }
 };

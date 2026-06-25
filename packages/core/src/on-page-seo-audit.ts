@@ -21,28 +21,24 @@ interface CheckDefinition {
 }
 
 const CHECKS: CheckDefinition[] = [
-  [1, "Headings & Titles", "Heading Hierarchy No Skips", 0, "Low"],
-  [2, "Content Signals & Clarity", "Entity Bolding Quality", 0, "Low"],
-  [3, "Structured Markup & Lists", "HTML Tables for Comparisons", 0, "Low"],
-  [4, "Structured Markup & Lists", "Table Captions", 0, "Low"],
-  [5, "Structured Markup & Lists", "<blockquote>+<cite> for Quotes", 0, "Low"],
-  [6, "Content Signals & Clarity", "<dfn> for Key Term Definitions", 0, "Low"],
-  [7, "Content Signals & Clarity", "<time datetime> on Dates", 0, "Low"],
+  [1, "Headings & Titles", "Heading Hierarchy No Skips", 1.5, "Medium"],
+  [2, "Content Signals & Clarity", "Entity Bolding Quality", 1, "Low"],
+  [3, "Structured Markup & Lists", "HTML Tables for Comparisons", 1, "Low"],
+  [4, "Structured Markup & Lists", "Table Captions", 1, "Low"],
+  [5, "Structured Markup & Lists", "<blockquote>+<cite> for Quotes", 1, "Low"],
+  [6, "Content Signals & Clarity", "<dfn> for Key Term Definitions", 1, "Low"],
+  [7, "Content Signals & Clarity", "<time datetime> on Dates", 1, "Low"],
   [8, "Headings & Titles", "Breadcrumb Schema-DOM Match", 2.17, "High"],
-  [9, "Structured Markup & Lists", "See Also Semantic Paths", 0, "Low"],
-  [10, "Internal Linking", "Contextual Internal Links", 0, "Low"],
+  [9, "Structured Markup & Lists", "See Also Semantic Paths", 1, "Low"],
+  [10, "Internal Linking", "Contextual Internal Links", 1.5, "Medium"],
   [11, "Image & Media Optimisation", "Alt Text Non-Empty", 2.72, "High"],
-  [12, "Headings & Titles", "Heading Capitalization Consistent", 0, "Low"],
-  [13, "Headings & Titles", "H1 Length 20-70 Characters", 0, "Low"],
+  [12, "Headings & Titles", "Heading Capitalization Consistent", 1, "Low"],
+  [13, "Headings & Titles", "H1 Length 20-70 Characters", 1.5, "Medium"],
   [14, "Headings & Titles", "Empty Heading Tags", 2.17, "Medium"]
 ].map(([id, category, name, weight, severity]) => ({ id, category, name, weight, severity })) as CheckDefinition[];
 
 const CATEGORY_ORDER = [...new Set(CHECKS.map((check) => check.category))];
-const ADVISORY_CHECK_IDS = new Set([1, 2, 3, 4, 5, 6, 7, 9, 10, 12, 13]);
-
-function advisoryOpportunity(name: string) {
-  return `Optional improvement: apply ${name.toLowerCase()} only where it improves clarity, accessibility, or content extraction.`;
-}
+const ADVISORY_CHECK_IDS = new Set<number>();
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, Math.round(value)));
@@ -97,9 +93,6 @@ function result(def: CheckDefinition, state: { passed?: boolean; skipped?: boole
   const evidence = state.evidence ?? {};
   return {
     ...def,
-    ...(ADVISORY_CHECK_IDS.has(def.id) && !passed && !skipped
-      ? { informational: true, opportunity: advisoryOpportunity(def.name) }
-      : {}),
     passed,
     skipped,
     warning,
@@ -597,8 +590,8 @@ export async function runOnPageSeoAudit(inputUrl: string, html?: string, siteCra
       passed: outcome.passed,
       skipped: outcome.skipped,
       warning: advisory && !outcome.passed && !outcome.skipped ? true : outcome.warning,
-      informational: advisory && !outcome.passed && !outcome.skipped ? true : undefined,
-      opportunity: advisory && !outcome.passed && !outcome.skipped ? advisoryOpportunity(check.name) : undefined,
+      informational: undefined,
+      opportunity: undefined,
       score: outcome.passed ? 1 : 0,
       evidence,
       recommendation: onPageSeoRecommendation(check.name, severity, evidence)
