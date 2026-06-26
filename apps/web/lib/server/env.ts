@@ -25,3 +25,17 @@ export function loadServerEnv() {
   applyEnvFile(resolve(process.cwd(), "../../.env"));
   if (process.env.INIT_CWD) applyEnvFile(resolve(process.env.INIT_CWD, ".env"));
 }
+
+export function serverEnvStatus() {
+  loadServerEnv();
+  return {
+    googleRedirectUriConfigured: Boolean(process.env.GOOGLE_REDIRECT_URI),
+    googleOAuthConfigured: Boolean(
+      process.env.GOOGLE_CLIENT_ID
+      && process.env.GOOGLE_CLIENT_SECRET
+      && process.env.GOOGLE_REDIRECT_URI
+    ),
+    pageSpeedConfigured: Boolean(process.env.PAGESPEED_API_KEY || process.env.GOOGLE_API_KEY),
+    cruxConfigured: Boolean(process.env.CRUX_API_KEY || process.env.GOOGLE_API_KEY)
+  };
+}

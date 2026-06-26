@@ -10,10 +10,11 @@ export interface ParameterOutcome {
 }
 
 function isScorable(check: ParameterOutcome) {
+  const severity = String(check.severity ?? "").toUpperCase();
   return !check.skipped
     && !check.informational
     && check.weight !== 0
-    && check.severity !== "Advisory";
+    && severity !== "ADVISORY";
 }
 
 export function scoreParameterOutcomes(
