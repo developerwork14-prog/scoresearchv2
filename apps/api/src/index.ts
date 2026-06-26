@@ -71,8 +71,12 @@ function createdPublicReportView(report: AiVisibilityReport): CreatedPublicRepor
   };
 }
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "ai-visibility-analyzer-api" });
+app.get("/health", async (_req, res) => {
+  res.json({
+    ok: true,
+    service: "ai-visibility-analyzer-api",
+    store: await reportStore.health()
+  });
 });
 
 app.post("/api/reports", async (req, res, next) => {
