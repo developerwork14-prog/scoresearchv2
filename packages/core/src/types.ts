@@ -554,6 +554,8 @@ export interface CoreWebVitalsSnapshot {
   speedIndex?: number;
   tbt?: number;
   checkedAt: string;
+  source?: "PageSpeed Insights" | "Crawl Timing";
+  unavailableReason?: string;
 }
 
 export interface RiskAssessment {

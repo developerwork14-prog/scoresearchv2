@@ -34,6 +34,8 @@ export interface PageSpeedSnapshot {
   speedIndex?: number;
   tbt?: number;
   checkedAt: string;
+  source?: "PageSpeed Insights" | "Crawl Timing";
+  unavailableReason?: string;
 }
 
 const PAGESPEED_TIMEOUT_MS = 15000;
@@ -130,8 +132,22 @@ export async function fetchPageSpeedInsights(url: string, strategy: PageSpeedStr
   }
 }
 
-export function pageSpeedSnapshot(website: string, mobile: PageSpeedMetrics | null, desktop: PageSpeedMetrics | null): PageSpeedSnapshot | undefined {
-  if (!mobile && !desktop) return undefined;
+export function pageSpeedSnapshot(
+  website: string,
+  mobile: PageSpeedMetrics | null,
+  desktop: PageSpeedMetrics | null,
+  fallback: { ttfb?: number; checkedAt?: string; unavailableReason?: string } = {}
+): PageSpeedSnapshot | undefined {
+  if (!mobile && !desktop) {
+    if (fallback.ttfb === undefined) return undefined;
+    return {
+      website,
+      ttfb: fallback.ttfb,
+      checkedAt: fallback.checkedAt ?? new Date().toISOString(),
+      source: "Crawl Timing",
+      unavailableReason: fallback.unavailableReason ?? "PageSpeed Insights data unavailable."
+    };
+  }
   return {
     website,
     performanceScore: mobile?.performanceScore ?? desktop?.performanceScore,
@@ -143,6 +159,7 @@ export function pageSpeedSnapshot(website: string, mobile: PageSpeedMetrics | nu
     fcp: mobile?.fcp ?? desktop?.fcp,
     speedIndex: mobile?.speedIndex ?? desktop?.speedIndex,
     tbt: mobile?.tbt ?? desktop?.tbt,
-    checkedAt: mobile?.checkedAt ?? desktop?.checkedAt ?? new Date().toISOString()
+    checkedAt: mobile?.checkedAt ?? desktop?.checkedAt ?? new Date().toISOString(),
+    source: "PageSpeed Insights"
   };
 }

@@ -31,6 +31,7 @@ import { classifyBusiness } from "./lib/business-classification.js";
 import { crawlSite, type SiteCrawlResult } from "./site-crawler.js";
 import { scoreParameterOutcomes } from "./audit-outcome.js";
 import { fetchBrandVisibility } from "./serper-brand-visibility.js";
+import { pageSpeedSnapshot } from "./pagespeed-insights.js";
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, Math.round(value)));
@@ -103,23 +104,95 @@ async function withAuditTimeout<T>(promise: Promise<T>, ms: number, fallback: T 
   }
 }
 
-function fallbackTechnicalAudit(reason: string): TechnicalAuditResult {
+function fallbackTechnicalCheck(
+  id: number,
+  category: string,
+  name: string,
+  passed: boolean,
+  evidence: Record<string, unknown>,
+  severity: TechnicalCheckResult["severity"] = "MAJOR",
+  weight = 1
+): TechnicalCheckResult {
   return {
-    score: 0,
-    rawScore: 0,
-    pageScore: 0,
+    id,
+    category,
+    name,
+    weight,
+    severity,
+    passed,
+    evidence: JSON.stringify(evidence),
+    scope: "page",
+    ...(passed ? {} : {
+      issueSummary: `${name} could not be fully verified in the reduced-scope technical audit.`,
+      whatIsWrong: "The full technical audit reached its processing budget before returning all parameters.",
+      businessImpact: "Some crawlability, performance, and accessibility findings may be incomplete until the full technical audit completes."
+    })
+  };
+}
+
+function fallbackTechnicalAudit(reason: string, crawl?: SiteCrawlResult): TechnicalAuditResult {
+  const homepage = crawl?.pages.find((page) => page.source === "homepage") ?? crawl?.pages[0];
+  const fallbackReason = "Technical audit reached its processing budget; showing reduced-scope crawl evidence.";
+  const evidence = {
+    reason: fallbackReason,
+    processingBudgetExceeded: true,
+    pagesCrawled: crawl?.pages.length ?? 0,
+    homepageUrl: homepage?.finalUrl ?? homepage?.url ?? "",
+    homepageStatus: homepage?.status ?? null,
+    responseTimeMs: homepage?.responseTimeMs ?? null
+  };
+  const checks = [
+    fallbackTechnicalCheck(
+      1,
+      "HTTP & Server Health",
+      "Page returns HTTP 200",
+      Boolean(homepage && homepage.status >= 200 && homepage.status < 300),
+      evidence,
+      "BLOCKER",
+      10
+    ),
+    fallbackTechnicalCheck(
+      32,
+      "Indexability & Crawlability",
+      "Page is indexable",
+      Boolean(homepage && homepage.status >= 200 && homepage.status < 300),
+      evidence,
+      "MAJOR",
+      8
+    )
+  ];
+  const score = scoreParameterOutcomes(checks, 0);
+  return {
+    score,
+    rawScore: score,
+    pageScore: score,
     domainScore: 0,
-    grade: "F",
-    blockerFailed: true,
+    grade: score >= 85 ? "A" : score >= 70 ? "B" : score >= 55 ? "C" : score >= 40 ? "D" : "F",
+    blockerFailed: checks.some((check) => check.severity === "BLOCKER" && !check.passed),
     checkedAt: new Date().toISOString(),
-    checks: [],
-    categoryDebug: [{
-      category: "Technical Audit",
-      totalChecks: 0,
-      passedChecks: 0,
-      failedChecks: 0,
-      failedCheckDetails: [{ id: 0, name: "Technical audit unavailable", evidence: reason }]
-    }]
+    pageSpeed: homepage ? pageSpeedSnapshot(homepage.finalUrl, null, null, {
+      ttfb: homepage.responseTimeMs,
+      unavailableReason: "PageSpeed Insights data unavailable; TTFB is based on the audit crawler response timing."
+    }) : undefined,
+    checks,
+    categoryDebug: checks.reduce<TechnicalAuditResult["categoryDebug"]>((items, check) => {
+      const existing = items?.find((item) => item.category === check.category);
+      if (existing) {
+        existing.totalChecks += 1;
+        existing.passedChecks += check.passed ? 1 : 0;
+        existing.failedChecks += check.passed ? 0 : 1;
+        if (!check.passed) existing.failedCheckDetails.push({ id: check.id, name: check.name, evidence: check.evidence });
+        return items;
+      }
+      items?.push({
+        category: check.category,
+        totalChecks: 1,
+        passedChecks: check.passed ? 1 : 0,
+        failedChecks: check.passed ? 0 : 1,
+        failedCheckDetails: check.passed ? [] : [{ id: check.id, name: check.name, evidence: check.evidence }]
+      });
+      return items;
+    }, [])
   };
 }
 
@@ -562,8 +635,8 @@ export async function generateVisibilityReport(input: ReportInput, origin = "htt
     };
     return withAuditTimeout(
     runTechnicalAudit(normalizedUrl, technicalSample),
-    55000,
-    fallbackTechnicalAudit("Technical audit timed out"),
+    90000,
+    () => fallbackTechnicalAudit("Technical audit timed out", technicalSample),
     "Technical audit"
   );
   });

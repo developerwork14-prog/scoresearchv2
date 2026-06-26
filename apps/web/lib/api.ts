@@ -3,6 +3,26 @@ import type { CreatedPublicReport, PlaygroundResult, ReportInput, StructuredAiVi
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 // Allow the server's five-minute audit budget plus response serialization time.
 const REPORT_REQUEST_TIMEOUT_MS = 330000;
+const REPORT_CACHE_PREFIX = "aiva-report:";
+
+function cacheReport(report: StructuredAiVisibilityReport) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(`${REPORT_CACHE_PREFIX}${report.id}`, JSON.stringify(report));
+  } catch {
+    // Session storage is a best-effort guard against read-after-write misses.
+  }
+}
+
+function cachedReport(id: string) {
+  if (typeof window === "undefined") return null;
+  try {
+    const value = window.sessionStorage.getItem(`${REPORT_CACHE_PREFIX}${id}`);
+    return value ? JSON.parse(value) as StructuredAiVisibilityReport : null;
+  } catch {
+    return null;
+  }
+}
 
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -21,7 +41,9 @@ export async function createReport(input: ReportInput) {
       body: JSON.stringify(input),
       signal: controller.signal
     });
-    return parseResponse<CreatedPublicReport>(response);
+    const report = await parseResponse<CreatedPublicReport>(response);
+    cacheReport(report);
+    return report;
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new Error("The scan exceeded five minutes. Please try again or check the audit server logs.");
@@ -34,7 +56,16 @@ export async function createReport(input: ReportInput) {
 
 export async function getReport(id: string) {
   const response = await fetch(`${API_BASE}/api/reports/${id}`, { cache: "no-store" });
-  return parseResponse<StructuredAiVisibilityReport>(response);
+  if (response.ok) {
+    const report = await response.json() as StructuredAiVisibilityReport;
+    cacheReport(report);
+    return report;
+  }
+  if (response.status === 404) {
+    const report = cachedReport(id);
+    if (report) return report;
+  }
+  throw new Error((await response.json().catch(() => null))?.message ?? "Request failed");
 }
 
 export async function runPlayground(reportId: string, prompt: string) {

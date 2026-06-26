@@ -415,6 +415,12 @@ function MiniGauge({ name, sub, score, platform }: { name: string; sub: string; 
 }
 
 function CoreWebVitalsPanel({ vitals }: { vitals?: StructuredAiVisibilityReport["core_web_vitals"] }) {
+  const hasLabOrFieldVitals = Boolean(vitals?.mobileLcp ?? vitals?.desktopLcp ?? vitals?.cls ?? vitals?.inp ?? vitals?.performanceScore);
+  const summary = vitals
+    ? !hasLabOrFieldVitals && vitals.ttfb !== undefined
+      ? `Limited crawl measurement · ${formatAuditDate(vitals.checkedAt)}`
+      : `Measured by PageSpeed Insights · ${formatAuditDate(vitals.checkedAt)}`
+    : "PageSpeed Insights data unavailable.";
   const items = [
     { label: "Mobile LCP", value: formatMs(vitals?.mobileLcp), meta: "Target <= 2.5s" },
     { label: "Desktop LCP", value: formatMs(vitals?.desktopLcp), meta: "Target <= 2.5s" },
@@ -428,7 +434,7 @@ function CoreWebVitalsPanel({ vitals }: { vitals?: StructuredAiVisibilityReport[
     <section className={styles.coreVitals}>
       <div className={styles.sectionHead}>
         <h2>Core Web Vitals</h2>
-        <p>{vitals ? `Measured by PageSpeed Insights · ${formatAuditDate(vitals.checkedAt)}` : "PageSpeed Insights data unavailable."}</p>
+        <p>{summary}</p>
       </div>
       <div className={styles.coreVitalsGrid}>
         {items.map((item) => (
@@ -1587,10 +1593,8 @@ export default function ReportPage() {
     const geminiChecks = checksForCategories(geoChecks, gemini);
     const crawlability = technical.filter((category) => ["Robots.txt & Sitemap", "Indexability & Crawlability", "Internal Linking", "AI Crawl Readiness"].includes(category.categoryName));
     const crawlabilityChecks = checksForCategories(report.technical_audit?.checks ?? [], crawlability);
-    const structuredDataCategories = (report.structured_data_audit?.categories ?? [])
-      .filter((category) => category.categoryName !== "Product Schema");
-    const structuredDataChecks = (report.structured_data_audit?.checks ?? [])
-      .filter((check) => check.category !== "Product Schema" && ![45, 50].includes(check.id ?? -1));
+    const structuredDataCategories = report.structured_data_audit?.categories ?? [];
+    const structuredDataChecks = report.structured_data_audit?.checks ?? [];
     const tabs: Record<AuditTabId, TabInfo> = {
       technical: tabMeta("Technical Audit", technical, report.technical_audit?.checks ?? [], report.technical_audit?.score, report.technical_audit?.checked_at ?? report.created_at),
       crawlability: tabMeta("Crawlability", crawlability, crawlabilityChecks, scoreFromCategories(crawlability), report.technical_audit?.checked_at ?? report.created_at),

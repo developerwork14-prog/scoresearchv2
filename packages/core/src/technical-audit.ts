@@ -2662,7 +2662,10 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
   const observedTtfb = ttfb ?? page.responseTimeMs;
   const desktopScore = desktopPsi?.performanceScore;
   const mobileScore = psi?.performanceScore;
-  const performanceSnapshot = pageSpeedSnapshot(page.finalUrl, psi, desktopPsi);
+  const performanceSnapshot = pageSpeedSnapshot(page.finalUrl, psi, desktopPsi, {
+    ttfb: page.responseTimeMs,
+    unavailableReason: "PageSpeed Insights data unavailable; TTFB is based on the audit crawler response timing."
+  });
   const psiUnavailableEvidence = JSON.stringify({ reason: "PageSpeed Insights data unavailable." });
   const performanceScoreWarning = (score?: number) => score !== undefined && score >= 70 && score < 90;
   const tapTargetsPass = psi?.tapTargetsPass;
