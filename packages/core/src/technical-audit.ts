@@ -1932,10 +1932,6 @@ function pass(def: CheckDefinition, passed: boolean, evidence: string, warning =
     passed: skipped ? true : passed,
     skipped: skipped || undefined,
     warning: !skipped && (warning || undefined),
-    ...(!skipped && !passed && def.severity === "ADVISORY" ? {
-      informational: true,
-      opportunity: crawlabilityRecommendation(def.id)
-    } : {}),
     evidence,
     issueSummary: skipped ? undefined : technicalIssueSummary(def.id, passed, evidence),
     whatIsWrong: skipped || passed ? undefined : technicalFailureDescription(def.id, evidence),
@@ -3524,10 +3520,10 @@ function scoreChecks(checks: TechnicalCheckResult[], pageSpeed?: PageSpeedSnapsh
   };
   const pageScore = outcomeScore("page");
   const domainScore = outcomeScore("domain");
-  const scorableChecks = checks.filter((check) => !check.skipped && check.severity !== "ADVISORY" && check.weight > 0);
+  const scorableChecks = checks.filter((check) => !check.skipped && check.severity !== "ADVISORY" && check.weight > 0 && !DUPLICATE_CHECK_IDS.has(check.id));
   const rawScore = scoreParameterOutcomes(scorableChecks, 0);
-  const blockerFailed = false;
-  const score = rawScore;
+  const blockerFailed = checks.some((check) => SCORE_CAP_BLOCKER_IDS.has(check.id) && !check.passed && !check.skipped);
+  const score = blockerFailed ? Math.min(rawScore, 49) : rawScore;
   const groupedChecks = checks.reduce<Map<string, TechnicalCheckResult[]>>((groups, check) => {
     const current = groups.get(check.category) ?? [];
     current.push(check);

@@ -1459,11 +1459,10 @@ function addInformationalCheck(
   if (!def) return;
   results.push({
     ...def,
-    passed: true,
+    passed: false,
     evidence,
-    informational: true,
-    opportunity,
-    priorityScore: 0,
+    warning: true,
+    priorityScore: 5,
     recommendation: opportunity
   });
 }
@@ -1543,7 +1542,7 @@ function pageClassification(page: LocalPageHtml) {
     || /\b(?:blog|article|guide|news|insight)\b/i.test(headingContext)
       && /\b(?:author|published|updated|reading time)\b/i.test(text);
   const faq = page$("details,.faq,[id*='faq' i],[class*='faq' i]").length > 0
-    || /\b(?:frequently asked questions|faq|questions and answers)\b/i.test(headingContext);
+    || /\b(?:frequently asked questions|faq|questions and answers)\b/i.test(`${headingContext} ${text.slice(0, 3000)}`);
   const help = /\/(?:help|support|knowledge-base|docs?)\//i.test(url)
     || /\b(?:help|support|documentation|knowledge base)\b/i.test(headingContext);
   const research = /\b(?:research|study|report|analysis|survey|data|methodology|statistics)\b/i.test(headingContext);
@@ -1873,7 +1872,22 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   addCheck(result, 11, llms?.response.ok === true && ["about", "service", "contact", "policy"].filter((term) => llms.text.toLowerCase().includes(term)).length >= 2, "llms.txt completeness scan");
   const verifiedProfilesMissingFromSchema = visibleOfficialProfiles.filter((href) => !sameAs.includes(href));
   if (!sameAs.length && !visibleOfficialProfiles.length) {
-    addSkippedCheck(result, 12, "sameAs is optional and no verified official profiles were detected");
+    addCheck(result, 12, false, JSON.stringify({
+      scope: "domain-level",
+      pagesCrawled: sitePages.length,
+      pagesChecked: 1,
+      pagesPassed: 0,
+      pagesFailed: 1,
+      passRate: 0,
+      affectedPages: [{ url: normalizedUrl, issueCount: 1 }],
+      sameAsUrls: [],
+      verifiedOfficialProfiles: [],
+      reason: "No Organization sameAs profiles and no visible official profile links were detected."
+    }), {
+      warning: true,
+      priorityScore: 20,
+      recommendation: "Add verified official social/profile URLs to Organization sameAs when the business maintains those profiles."
+    });
   } else {
     addCheck(
       result,
@@ -1901,12 +1915,40 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   if (sameAs.some((href) => /linkedin\.com/i.test(href))) {
     addCheck(result, 13, true, JSON.stringify({ pagesCrawled: sitePages.length, pagesChecked: 1, pagesFailed: 0, linkedinFound: true }));
   } else {
-    addSkippedCheck(result, 13, "LinkedIn is optional; no verified official LinkedIn profile was detected in Organization sameAs");
+    addCheck(result, 13, false, JSON.stringify({
+      scope: "domain-level",
+      pagesCrawled: sitePages.length,
+      pagesChecked: 1,
+      pagesPassed: 0,
+      pagesFailed: 1,
+      passRate: 0,
+      affectedPages: [{ url: normalizedUrl, issueCount: 1 }],
+      sameAsUrls: sameAs,
+      reason: "No verified official LinkedIn profile was detected in Organization sameAs."
+    }), {
+      warning: true,
+      priorityScore: 10,
+      recommendation: "Add the verified company LinkedIn URL to Organization sameAs when one exists."
+    });
   }
   if (sameAs.some((href) => /crunchbase\.com|wikidata\.org/i.test(href))) {
     addCheck(result, 14, true, JSON.stringify({ pagesCrawled: sitePages.length, pagesChecked: 1, pagesFailed: 0, authorityProfileFound: true }));
   } else {
-    addSkippedCheck(result, 14, "Crunchbase and Wikidata are optional; no verified profile was detected and no profile should be created only for this check");
+    addCheck(result, 14, false, JSON.stringify({
+      scope: "domain-level",
+      pagesCrawled: sitePages.length,
+      pagesChecked: 1,
+      pagesPassed: 0,
+      pagesFailed: 1,
+      passRate: 0,
+      affectedPages: [{ url: normalizedUrl, issueCount: 1 }],
+      sameAsUrls: sameAs,
+      reason: "No Crunchbase or Wikidata entity profile was detected in Organization sameAs."
+    }), {
+      warning: true,
+      priorityScore: 10,
+      recommendation: "Add verified authority/entity profiles to sameAs when legitimate profiles exist."
+    });
   }
   addCheck(result, 15, (
     !localBusinessObjects.length &&
@@ -1928,9 +1970,9 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   ) || visibleNapSignal(localGeoBodyText), "NAP consistency scan");
   addCheck(result, 16, jsonLd.errors.length === 0 && schemaTypes.length > 0, `${jsonLd.errors.length} JSON-LD errors`);
   if (!faqIntentPages.length) {
-    addSkippedCheck(result, 17, "No FAQ intent page was detected");
-    addSkippedCheck(result, 18, "No visible FAQ intent was detected, so FAQPage schema is not required");
-    addSkippedCheck(result, 19, "No FAQPage schema or applicable FAQ page was detected");
+    addCheck(result, 17, false, geoPageEvidence(sitePages.length, sitePages, sitePages, "No FAQ section or FAQ-intent page was detected"));
+    addCheck(result, 18, false, geoPageEvidence(sitePages.length, sitePages, sitePages, "No FAQPage schema could be matched because no visible FAQ section was detected"));
+    addCheck(result, 19, false, geoPageEvidence(sitePages.length, sitePages, sitePages, "No complete FAQPage schema was detected"));
   } else {
     const faqSectionFailures = faqIntentPages.filter(({ page$ }) => page$("details,.faq,[id*='faq' i],[class*='faq' i]").length === 0);
     addCheck(result, 17, faqSectionFailures.length === 0, geoPageEvidence(sitePages.length, faqIntentPages.map((item) => item.page), faqSectionFailures.map((item) => item.page), "FAQ-intent page has no visible FAQ section"));

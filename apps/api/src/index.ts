@@ -140,7 +140,23 @@ app.post("/api/strategy-call", async (req, res, next) => {
       ? `https://wa.me/${env.whatsappNumber.replace(/\D/g, "")}?text=${encodeURIComponent(message)}`
       : "";
 
-    console.log(message);
+    if (process.env.RESEND_API_KEY && env.notificationEmail) {
+      await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          from: "SearchScore.ai <leads@searchscore.ai>",
+          to: env.notificationEmail,
+          subject: `Strategy Call Request - ${report.brandName}`,
+          text: message
+        })
+      }).catch((err) => console.error("Resend API error:", err));
+    } else {
+      console.log("Strategy call lead captured (Resend not configured):", message);
+    }
     res.status(201).json({
       ok: true,
       mailtoUrl,

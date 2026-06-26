@@ -15,3 +15,4 @@ export { runStructuredDataAudit } from "./structured-data-audit.js";
 export { runTrustSignalsAudit } from "./trust-signals-audit.js";
 export * from "./structured-report.js";
 export * from "./lib/business-classification.js";
+export * from "./serper-brand-visibility.js";

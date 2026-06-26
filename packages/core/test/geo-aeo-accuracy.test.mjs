@@ -130,8 +130,15 @@ try {
   assert.ok(sameAs.priorityScore >= 10 && sameAs.priorityScore <= 25);
   assert.match(sameAs.recommendation, /verified official profile/i);
 
-  assert.equal(check(audit, 13).skipped, true);
-  assert.equal(check(audit, 14).skipped, true);
+  const linkedin = check(audit, 13);
+  assert.equal(linkedin.passed, false);
+  assert.equal(linkedin.warning, true);
+  assert.equal(linkedin.skipped, undefined);
+
+  const authorityProfile = check(audit, 14);
+  assert.equal(authorityProfile.passed, false);
+  assert.equal(authorityProfile.warning, true);
+  assert.equal(authorityProfile.skipped, undefined);
 
   for (const id of [28, 29, 30, 31]) {
     assert.equal(check(audit, id).skipped, true, `Local GEO check ${id} should be skipped`);
@@ -161,11 +168,13 @@ try {
 
   for (const id of [49, 50]) {
     const opportunity = check(audit, id);
-    assert.equal(opportunity.passed, true);
-    assert.equal(opportunity.informational, true);
+    assert.equal(opportunity.passed, false);
+    assert.equal(opportunity.warning, true);
+    assert.equal(opportunity.informational, undefined);
     assert.equal(opportunity.severity, "ADVISORY");
-    assert.equal(opportunity.priorityScore, 0);
-    assert.match(opportunity.opportunity, /create/i);
+    assert.equal(opportunity.priorityScore, 5);
+    assert.equal(opportunity.opportunity, undefined);
+    assert.match(opportunity.recommendation, /Create/i);
   }
 
   assert.equal(check(audit, 52).skipped, true);

@@ -38,10 +38,6 @@ const CHECKS: CheckDefinition[] = [
 
 const CATEGORY_ORDER = [...new Set(CHECKS.map((check) => check.category))];
 const ADVISORY_CHECK_IDS = new Set([4, 6, 7, 8, 12, 13]);
-
-function advisoryOpportunity(name: string) {
-  return `Optional image optimization: improve ${name.toLowerCase()} where it benefits performance, accessibility, or image understanding.`;
-}
 const RASTER_EXTENSIONS = /\.(?:jpe?g|png|gif|webp|avif)(?:[?#]|$)/i;
 
 function clamp(value: number, min = 0, max = 100) {
@@ -75,13 +71,10 @@ function result(def: CheckDefinition, state: { passed?: boolean; skipped?: boole
   const warning = !skipped && !passed && Boolean(state.warning);
   return {
     ...def,
-    ...(ADVISORY_CHECK_IDS.has(def.id) && !passed && !skipped
-      ? { informational: true, opportunity: advisoryOpportunity(def.name) }
-      : {}),
     recommendation: imageSeoRecommendation(def.name, def.severity, state.evidence ?? {}),
     passed,
     skipped,
-    warning,
+    warning: warning || (ADVISORY_CHECK_IDS.has(def.id) && !passed && !skipped),
     score: skipped ? 0 : passed ? 1 : 0,
     evidence: state.evidence ?? {}
   };
@@ -624,8 +617,8 @@ export async function runImageSeoAudit(inputUrl: string, html?: string, siteCraw
       passed: outcome.passed,
       skipped: outcome.skipped,
       warning: advisory && !outcome.passed && !outcome.skipped ? true : outcome.warning,
-      informational: advisory && !outcome.passed && !outcome.skipped ? true : undefined,
-      opportunity: advisory && !outcome.passed && !outcome.skipped ? advisoryOpportunity(check.name) : undefined,
+      informational: undefined,
+      opportunity: undefined,
       score: outcome.passed ? 1 : 0,
       evidence,
       recommendation: imageSeoRecommendation(check.name, severity, evidence)

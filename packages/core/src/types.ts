@@ -11,6 +11,13 @@ export interface ReportInput {
   brandName: string;
   websiteUrl: string;
   businessEmail: string;
+  googleSearchConsole?: GoogleSearchConsoleContext;
+}
+
+export interface GoogleSearchConsoleContext {
+  accessToken: string;
+  siteUrl: string;
+  inspectionUrl?: string;
 }
 
 export interface ScoringPillars {

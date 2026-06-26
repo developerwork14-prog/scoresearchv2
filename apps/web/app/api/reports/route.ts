@@ -5,6 +5,7 @@ import { reportStore } from "@/lib/server/report-store";
 import { createdPublicReportView } from "@/lib/server/report-views";
 import { BUSINESS_EMAIL_MESSAGE, isBusinessEmail } from "@/lib/business-email";
 import { loadServerEnv } from "@/lib/server/env";
+import { googleSearchConsoleContextForWebsite } from "@/lib/server/google-search-console";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -19,7 +20,8 @@ export async function POST(request: NextRequest) {
   try {
     loadServerEnv();
     const input = reportInputSchema.parse(await request.json());
-    const report = await generateVisibilityReport(input, new URL(request.url).origin);
+    const googleSearchConsole = await googleSearchConsoleContextForWebsite(input.websiteUrl);
+    const report = await generateVisibilityReport({ ...input, googleSearchConsole }, new URL(request.url).origin);
     await reportStore.save(report);
     return NextResponse.json(createdPublicReportView(report), { status: 201 });
   } catch (error) {

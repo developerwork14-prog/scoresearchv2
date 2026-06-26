@@ -411,25 +411,22 @@ export async function runTrustSignalsAudit(inputUrl: string, html?: string, bran
 
   add(1, {
     passed: Boolean(schemaAddressMatchesVisible && schemaPhoneMatchesVisible),
-    skipped: !comparisonReady,
     evidence: !comparisonReady
-      ? skippedEvidence("Insufficient evidence.", { schemaExists: Boolean(entity), schemaAddress: address.full, schemaPhones: schemaPhoneValues, visibleAddress, visiblePhones: allPhones })
+      ? pageEvidence(normalized, true, { reason: "Missing Organization/LocalBusiness schema, visible address, or visible phone needed for NAP consistency.", schemaExists: Boolean(entity), schemaAddress: address.full, schemaPhones: schemaPhoneValues, visibleAddress, visiblePhones: allPhones })
       : pageEvidence(normalized, !(schemaAddressMatchesVisible && schemaPhoneMatchesVisible), { schemaAddress: address.full, schemaPhones: schemaPhoneValues, contactUrl: contactLink?.href ?? "", visibleAddress, footerAddresses, contactAddresses, footerPhones, contactPhones }),
     recommendation: "Make the verified business address and phone match across schema, footer, and contact page."
   });
   add(2, {
     passed: Boolean(address.city && [body, footer, contactText].every((text) => !text || containsExactText(text, address.city))),
-    skipped: !comparisonReady || !address.city,
     evidence: !comparisonReady || !address.city
-      ? skippedEvidence("Insufficient evidence.")
+      ? pageEvidence(normalized, true, { reason: "No schema city/locality was available to compare against homepage, footer, and contact page.", schemaCity: address.city, visibleAddress })
       : pageEvidence(normalized, ![body, footer, contactText].every((text) => !text || containsExactText(text, address.city)), { city: address.city, checkedSurfaces: ["homepage", "footer", "contact"] }),
     recommendation: "Use the verified city name consistently across schema, footer, and contact information."
   });
   add(3, {
     passed: Boolean(brandCandidate && containsExactText(body, brandCandidate) && (!schemaName || compact(schemaName) === compact(brandCandidate)) && (!contactText || containsExactText(contactText, brandCandidate))),
-    skipped: !comparisonReady || !brandCandidate,
     evidence: !comparisonReady || !brandCandidate
-      ? skippedEvidence("Insufficient evidence.")
+      ? pageEvidence(normalized, true, { reason: "No comparable brand identity was available across schema/homepage/contact surfaces.", inputBrand: brandName, schemaName, contactUrl: contactLink?.href ?? "" })
       : pageEvidence(normalized, !(containsExactText(body, brandCandidate) && compact(schemaName) === compact(brandCandidate) && (!contactText || containsExactText(contactText, brandCandidate))), { inputBrand: brandName, schemaName, contactUrl: contactLink?.href ?? "" }),
     recommendation: "Use the verified brand name consistently in schema, homepage, and contact information."
   });
@@ -451,17 +448,15 @@ export async function runTrustSignalsAudit(inputUrl: string, html?: string, bran
   });
   add(5, {
     passed: schemaAddressMatchesVisible,
-    skipped: !comparisonReady,
     evidence: !comparisonReady
-      ? skippedEvidence("Insufficient evidence.")
+      ? pageEvidence(normalized, true, { reason: "Missing schema address or visible contact address; address parity could not be satisfied.", schemaAddress: address.full, visibleAddress, footerAddresses, contactAddresses, contactUrl: contactLink?.href ?? "" })
       : pageEvidence(normalized, !schemaAddressMatchesVisible, { schemaAddress: address.full, visibleAddress, footerAddresses, contactAddresses, contactUrl: contactLink?.href ?? "" }),
     recommendation: "Correct the proven address mismatch between visible contact details and organization schema."
   });
   add(6, {
     passed: allPhoneDigits.length === 1,
-    skipped: allPhoneDigits.length === 0,
     evidence: allPhoneDigits.length === 0
-      ? skippedEvidence("Insufficient evidence.")
+      ? pageEvidence(normalized, true, { reason: "No visible phone number was detected on homepage, footer, or contact page.", phones: allPhones, normalizedPhones: allPhoneDigits })
       : pageEvidence(normalized, allPhoneDigits.length > 1, { phones: allPhones, normalizedPhones: allPhoneDigits }),
     recommendation: "Use one verified phone number format consistently across public contact surfaces."
   });
@@ -476,17 +471,15 @@ export async function runTrustSignalsAudit(inputUrl: string, html?: string, bran
   });
   add(8, {
     passed: Boolean(schemaName && containsExactText(body, schemaName)),
-    skipped: !schemaName,
     evidence: !schemaName
-      ? skippedEvidence("Insufficient evidence.")
+      ? pageEvidence(normalized, true, { reason: "No Organization/LocalBusiness schema name was detected for DOM parity." })
       : pageEvidence(normalized, !containsExactText(body, schemaName), { schemaName }),
     recommendation: "Make the organization name in schema match the visible brand name."
   });
   add(9, {
     passed: schemaPhoneDigits.length > 0 && schemaPhoneDigits.every((phone) => allPhoneDigits.includes(phone)),
-    skipped: !comparisonReady,
     evidence: !comparisonReady
-      ? skippedEvidence("Insufficient evidence.")
+      ? pageEvidence(normalized, true, { reason: "Missing schema phone or visible phone; phone parity could not be satisfied.", schemaPhones: schemaPhoneValues, domPhones: allPhones })
       : pageEvidence(normalized, !schemaPhoneDigits.every((phone) => allPhoneDigits.includes(phone)), { schemaPhones: schemaPhoneValues, domPhones: allPhones }),
     recommendation: "Correct the proven phone-number mismatch between visible contact details and organization schema."
   });
@@ -504,9 +497,8 @@ export async function runTrustSignalsAudit(inputUrl: string, html?: string, bran
   add(11, { skipped: true, evidence: { reason: "Form functionality cannot be verified with 100% accuracy without submitting the form." } });
   add(12, {
     passed: copyrightYears(allText).some((year) => year >= currentYear),
-    skipped: copyrightYears(allText).length === 0,
     evidence: copyrightYears(allText).length === 0
-      ? skippedEvidence("Unable to verify a visible copyright year.")
+      ? pageEvidence(normalized, true, { reason: "No visible copyright year was detected.", currentYear })
       : pageEvidence(normalized, !copyrightYears(allText).some((year) => year >= currentYear), { copyrightYears: copyrightYears(allText), currentYear }),
     recommendation: `Update the visible copyright year to ${currentYear} when the footer displays an older year.`
   });
@@ -547,9 +539,8 @@ export async function runTrustSignalsAudit(inputUrl: string, html?: string, bran
   const privacyUpdated = policyDate(privacyText);
   add(15, {
     passed: Boolean(privacyUpdated && addMonths(privacyUpdated, 24) >= new Date()),
-    skipped: !privacyUpdated,
     evidence: !privacyUpdated
-      ? skippedEvidence("Unable to verify policy update date.", { privacyUrl: privacyLink?.href ?? "", status: privacyPage?.status ?? 0 })
+      ? pageEvidence(privacyLink?.href ?? normalized, true, { reason: "No visible last-updated or effective date was detected on the privacy policy.", privacyUrl: privacyLink?.href ?? "", status: privacyPage?.status ?? 0 })
       : pageEvidence(privacyLink?.href ?? normalized, addMonths(privacyUpdated, 24) < new Date(), { lastUpdated: privacyUpdated.toISOString() }),
     recommendation: "Review and visibly update the privacy policy when its verified update date is older than 24 months."
   });

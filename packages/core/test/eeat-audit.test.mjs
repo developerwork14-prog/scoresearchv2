@@ -61,18 +61,23 @@ try {
   const homepageAudit = await runEeatAudit(origin);
 
   for (const id of [7, 15, 19]) {
-    assert.equal(check(homepageAudit, id).skipped, true, `EEAT check ${id} should not fail the transactional homepage`);
+    const item = check(homepageAudit, id);
+    assert.equal(item.passed, false, `EEAT check ${id} should surface missing trust evidence`);
+    assert.equal(item.skipped, false);
+    assert.equal(item.evidence.pagesFailed, 1);
   }
   assert.equal(check(homepageAudit, 1).passed, true);
   assert.equal(check(homepageAudit, 2).passed, true);
   assert.equal(check(homepageAudit, 3).passed, true);
-  assert.equal(check(homepageAudit, 16).passed, true);
+  assert.equal(check(homepageAudit, 16).passed, false);
+  assert.equal(check(homepageAudit, 16).warning, true);
   assert.equal(check(homepageAudit, 17).passed, true);
   assert.equal(check(homepageAudit, 12).passed, true);
   assert.equal(check(homepageAudit, 13).passed, true);
-  assert.equal(check(homepageAudit, 10).skipped, true);
+  assert.equal(check(homepageAudit, 10).passed, false);
+  assert.equal(check(homepageAudit, 10).skipped, false);
   const homepageFailures = homepageAudit.checks.filter((item) => !item.passed && !item.skipped);
-  assert.equal(homepageFailures.length, 0, JSON.stringify(homepageFailures));
+  assert.ok(homepageFailures.length >= 4, JSON.stringify(homepageFailures));
 
   const articleAudit = await runEeatAudit(`${origin}/blogs/no-byline`);
   const byline = check(articleAudit, 1);
