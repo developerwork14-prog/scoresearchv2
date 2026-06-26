@@ -28,7 +28,7 @@ import { runOnPageSeoAudit } from "./on-page-seo-audit.js";
 import { runStructuredDataAudit } from "./structured-data-audit.js";
 import { runTrustSignalsAudit } from "./trust-signals-audit.js";
 import { classifyBusiness } from "./lib/business-classification.js";
-import { crawlSite } from "./site-crawler.js";
+import { crawlSite, type SiteCrawlResult } from "./site-crawler.js";
 import { scoreParameterOutcomes } from "./audit-outcome.js";
 import { fetchBrandVisibility } from "./serper-brand-visibility.js";
 
@@ -514,18 +514,46 @@ async function fetchHomepageHtml(url: string) {
   }
 }
 
+function emptySiteCrawl(inputUrl: string, reason: string): SiteCrawlResult {
+  const normalizedUrl = inputUrl.startsWith("http") ? inputUrl : `https://${inputUrl}`;
+  const url = new URL(normalizedUrl);
+  return {
+    origin: `${url.protocol}//${url.host}`,
+    sitemapUrls: [],
+    sitemapSummary: {
+      totalUrls: 0,
+      sitemapsFound: 0,
+      sitemapsFailed: 0,
+      discoveryMethod: reason,
+      sitemapsDiscovered: 0,
+      sitemapFileLimit: 0
+    },
+    crawlStats: {
+      targetUrls: 1,
+      attemptedUrls: 1,
+      htmlPages: 0,
+      failedOrNonHtmlUrls: 1,
+      cappedByMaxPages: false
+    },
+    pages: []
+  };
+}
+
 export async function generateVisibilityReport(input: ReportInput, origin = "http://localhost:3000"): Promise<AiVisibilityReport> {
   const normalizedUrl = input.websiteUrl.startsWith("http") ? input.websiteUrl : `https://${input.websiteUrl}`;
   const seed = stableHash(`${input.brandName}:${normalizedUrl}:${input.businessEmail}`);
   const htmlContentPromise = fetchHomepageHtml(normalizedUrl);
   const siteCrawlPromise = crawlSite(normalizedUrl, {
-    maxPages: 200,
-    maxDepth: 5,
-    timeoutMs: 4000,
-    overallTimeoutMs: 90000,
-    concurrency: 10,
-    maxSitemapFiles: 100,
+    maxPages: 80,
+    maxDepth: 3,
+    timeoutMs: 2500,
+    overallTimeoutMs: 25000,
+    concurrency: 8,
+    maxSitemapFiles: 25,
     followInternalLinks: true
+  }).catch((error) => {
+    console.warn("Site crawl failed; continuing with empty crawl", error);
+    return emptySiteCrawl(normalizedUrl, "crawl failed");
   });
   const technicalAuditPromise = siteCrawlPromise.then((crawl) => {
     const technicalSample = {
@@ -534,50 +562,50 @@ export async function generateVisibilityReport(input: ReportInput, origin = "htt
     };
     return withAuditTimeout(
     runTechnicalAudit(normalizedUrl, technicalSample),
-    90000,
+    55000,
     fallbackTechnicalAudit("Technical audit timed out"),
     "Technical audit"
   );
   });
   const geoAeoAuditPromise = htmlContentPromise.then((html) => withAuditTimeout(
     runGeoAeoAudit(normalizedUrl, html),
-    45000,
+    25000,
     fallbackGeoAeoAudit("GEO / AEO audit timed out"),
     "GEO / AEO audit"
   ));
   const indexabilityAuditPromise = htmlContentPromise.then((html) => withAuditTimeout(
     runIndexabilityAudit(normalizedUrl, html, { googleSearchConsole: input.googleSearchConsole }),
-    45000,
+    25000,
     fallbackIndexabilityAudit("Indexability audit timed out"),
     "Indexability audit"
   ));
   const structuredDataAuditPromise = Promise.all([htmlContentPromise, siteCrawlPromise]).then(([html, crawl]) => withAuditTimeout(
     runStructuredDataAudit(normalizedUrl, html, crawl),
-    30000,
+    15000,
     fallbackStructuredDataAudit("Structured data audit timed out"),
     "Structured data audit"
   ));
   const onPageSeoAuditPromise = Promise.all([htmlContentPromise, siteCrawlPromise]).then(([html, crawl]) => withAuditTimeout(
     runOnPageSeoAudit(normalizedUrl, html, crawl),
-    30000,
+    15000,
     fallbackOnPageSeoAudit("On-Page SEO audit timed out"),
     "On-Page SEO audit"
   ));
   const imageSeoAuditPromise = Promise.all([htmlContentPromise, siteCrawlPromise]).then(([html, crawl]) => withAuditTimeout(
     runImageSeoAudit(normalizedUrl, html, crawl),
-    30000,
+    15000,
     fallbackImageSeoAudit("Image SEO audit timed out"),
     "Image SEO audit"
   ));
   const eeatAuditPromise = htmlContentPromise.then((html) => withAuditTimeout(
     runEeatAudit(normalizedUrl, html),
-    10000,
+    8000,
     fallbackEeatAudit("EEAT audit timed out"),
     "EEAT audit"
   ));
   const trustSignalsAuditPromise = htmlContentPromise.then((html) => withAuditTimeout(
     runTrustSignalsAudit(normalizedUrl, html, input.brandName, input.businessEmail),
-    10000,
+    8000,
     fallbackTrustSignalsAudit("Trust Signals audit timed out"),
     "Trust Signals audit"
   ));
@@ -591,7 +619,19 @@ export async function generateVisibilityReport(input: ReportInput, origin = "htt
     imageSeoAuditPromise,
     eeatAuditPromise,
     trustSignalsAuditPromise,
-    fetchBrandVisibility(input.brandName, normalizedUrl)
+    withAuditTimeout(
+      fetchBrandVisibility(input.brandName, normalizedUrl),
+      12000,
+      {
+        brandOrganicScore: 50,
+        categoryVisibilityScore: 50,
+        brandPosition: null,
+        aiOverviewDetected: false,
+        knowledgePanelDetected: false,
+        evidence: { skipped: true, reason: "Brand visibility lookup timed out" }
+      },
+      "Brand visibility lookup"
+    )
   ]);
   const classification = classifyBusiness(normalizedUrl, htmlContent);
   const category = classification.subIndustry;

@@ -36,7 +36,7 @@ export interface PageSpeedSnapshot {
   checkedAt: string;
 }
 
-const PAGESPEED_TIMEOUT_MS = 45000;
+const PAGESPEED_TIMEOUT_MS = 15000;
 
 function apiKey(...names: string[]) {
   return names.map((name) => process.env[name]).find(Boolean);

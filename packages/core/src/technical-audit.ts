@@ -71,6 +71,9 @@ interface CheckDefinition {
   severity: TechnicalSeverity;
 }
 
+type CheckDefinitionTuple = readonly [number, string, string, number, TechnicalSeverity];
+type RawCheckDefinition = CheckDefinition | CheckDefinitionTuple;
+
 export interface FetchedPage {
   url: string;
   finalUrl: string;
@@ -139,7 +142,7 @@ export interface TechnicalAuditResult {
 
 const PERMANENT_REDIRECT_STATUSES = new Set([301, 308]);
 
-const CHECKS: CheckDefinition[] = [
+const CHECKS: RawCheckDefinition[] = [
   [1, "HTTP & Server Health", "Page returns HTTP 200", 10, "BLOCKER"],
   [2, "HTTP & Server Health", "HTTPS protocol enabled", 10, "BLOCKER"],
   [3, "HTTP & Server Health", "SSL certificate valid and not expired", 8, "BLOCKER"],
@@ -594,6 +597,30 @@ async function fetchPage(url: string, timeoutMs = 9000): Promise<FetchedPage> {
     $,
     wordCount: wordCount($("body").text())
   };
+}
+
+function technicalAuditUnavailable(inputUrl: string, status: ObservedFetchStatus | number, message: string): TechnicalAuditResult {
+  const normalizedUrl = normalizeUrl(inputUrl);
+  const evidence = JSON.stringify({
+    scope: "homepage-only",
+    pagesCrawled: 0,
+    pagesChecked: 1,
+    pagesPassed: 0,
+    pagesFailed: 1,
+    passRate: 0,
+    affectedPages: [{ url: normalizedUrl, issueCount: 1, sampleEvidence: message }],
+    observedStatus: status,
+    sampleEvidence: [message]
+  });
+  const checksById = new Map(CHECKS.map((check) => {
+    const definition = normalizeCheckDefinition(check);
+    return [definition.id, definition];
+  }));
+  const unavailableChecks = [1, 32, 34, 191, 215].flatMap((id) => {
+    const definition = checksById.get(id);
+    return definition ? [pass(definition, false, evidence)] : [];
+  });
+  return scoreChecks(unavailableChecks);
 }
 
 export function excludedBrokenLinkHref(href: string) {
@@ -2184,7 +2211,7 @@ export function technicalFailureDescription(id: number, evidence: string) {
   if (typeof parsed.metric === "string" && parsed.measuredValue !== undefined && parsed.threshold !== undefined) {
     return `${parsed.metric} measured ${String(parsed.measuredValue)}${String(parsed.unit ?? "")}; required less than ${String(parsed.threshold)}${String(parsed.unit ?? "")}.`;
   }
-  const definition = CHECKS.find((check) => check.id === id);
+  const definition = CHECKS.map(normalizeCheckDefinition).find((check) => check.id === id);
   const pagesChecked = Number(parsed.pagesChecked);
   const pagesFailed = Number(parsed.pagesFailed);
   if (Number.isFinite(pagesChecked) && Number.isFinite(pagesFailed)) {
@@ -2201,6 +2228,14 @@ const BROWSER_LOADED_HTTP_ASSET_SELECTORS = [
   { tag: "video", attr: "src" },
   { tag: "audio", attr: "src" }
 ];
+
+function normalizeCheckDefinition(definition: RawCheckDefinition): CheckDefinition {
+  if (Array.isArray(definition)) {
+    const [id, category, name, weight, severity] = definition;
+    return { id, category, name, weight, severity };
+  }
+  return definition as CheckDefinition;
+}
 
 function linkElementLoadsResource($: cheerio.CheerioAPI, el: Parameters<cheerio.CheerioAPI>[0]) {
   const rel = ($(el).attr("rel") ?? "").toLowerCase();
@@ -2242,7 +2277,8 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
     try {
       page = await fetchPage(url.toString(), 12000);
     } catch (error) {
-      throw new Error(`Technical audit homepage unavailable: ${error instanceof Error ? error.message : "unknown error"}`);
+      const status = observedFetchStatus(error);
+      return technicalAuditUnavailable(url.toString(), status, `Homepage unavailable: ${status}`);
     }
   }
 
@@ -2707,7 +2743,10 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
     sampleEvidence: browserMixedContentAssets.slice(0, 10)
   });
   console.debug("Technical audit mixed content", mixedContentDebug);
-  const checksById = new Map(CHECKS.map((check) => [check.id, check]));
+  const checksById = new Map(CHECKS.map((check) => {
+    const definition = normalizeCheckDefinition(check);
+    return [definition.id, definition];
+  }));
 
   const results: TechnicalCheckResult[] = [];
   const add = (id: number, passed: boolean, evidence: string, overrides: Partial<Pick<CheckDefinition, "severity" | "weight" | "name" | "category">> & { warning?: boolean; skipped?: boolean } = {}) => {

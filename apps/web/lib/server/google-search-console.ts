@@ -4,6 +4,7 @@ import { loadServerEnv } from "./env";
 import { reportStore } from "./report-store";
 
 const GSC_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
+const GOOGLE_API_TIMEOUT_MS = 8000;
 
 export interface GoogleSearchConsoleConnection {
   id: string;
@@ -44,7 +45,8 @@ async function googleTokenRequest(body: URLSearchParams) {
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body
+    body,
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS)
   });
   const data = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) throw new Error(`Google OAuth token request failed: ${JSON.stringify(data)}`);
@@ -83,7 +85,8 @@ export async function refreshGoogleAccessToken(connection: GoogleSearchConsoleCo
 
 export async function listSearchConsoleSites(accessToken: string) {
   const response = await fetch("https://www.googleapis.com/webmasters/v3/sites", {
-    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" }
+    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS)
   });
   const data = await response.json().catch(() => ({})) as { siteEntry?: Array<{ siteUrl?: string; permissionLevel?: string }> };
   if (!response.ok) throw new Error(`Search Console sites request failed: ${JSON.stringify(data)}`);
