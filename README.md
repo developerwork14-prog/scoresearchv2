@@ -38,6 +38,13 @@ MONGODB_URI=your_mongodb_atlas_connection_string
 MONGODB_DB=aiva
 LEAD_NOTIFICATION_EMAIL=your@email.com
 LEAD_WHATSAPP_NUMBER=919999999999
+GOOGLE_CLIENT_ID=your_google_oauth_client_id
+GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
+GOOGLE_REDIRECT_URI=https://your-domain.com/api/auth/callback/google
+PAGESPEED_API_KEY=your_pagespeed_api_key
+CRUX_API_KEY=your_crux_api_key
 ```
 
 Do not set `NEXT_PUBLIC_API_BASE` on Vercel unless you intentionally want the web app to call a separate API. Leaving it empty makes the app use its own `/api/*` routes.
+
+`PAGESPEED_API_KEY` powers PageSpeed Insights/Lighthouse performance data. `CRUX_API_KEY` powers Chrome UX Report field metrics. A shared `GOOGLE_API_KEY` can be used as a fallback for both, but separate keys make usage easier to monitor.
