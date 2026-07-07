@@ -14,6 +14,7 @@ import {
   StructuredOpportunity,
   StructuredRatingLabel
 } from "./types.js";
+import { generateSeoTasks } from "./tasks/generate-seo-tasks.js";
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, Math.round(value)));
@@ -240,6 +241,7 @@ export function toStructuredAiVisibilityReport(report: AiVisibilityReport): Stru
     image_seo_audit: imageSeoAudit,
     eeat_audit: eeatAudit,
     trust_signals_audit: trustSignalsAudit,
+    seo_tasks: generateSeoTasks(report, { now: report.createdAt }),
     playground_questions: [
       `What does ${report.brandName} offer in ${category}?`,
       `Is ${report.brandName} a trusted option for ${category}?`,

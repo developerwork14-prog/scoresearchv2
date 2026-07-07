@@ -1,3 +1,5 @@
+import type { SeoTask } from "./types/seo-task.js";
+
 export type VisibilityLevel = "Critical" | "Poor" | "Below Average" | "Average" | "Strong" | "Excellent";
 export type IntentType = "Commercial" | "Transactional" | "Informational" | "Comparison";
 export type ImpactLevel = "High" | "Medium" | "Low";
@@ -652,6 +654,7 @@ export interface StructuredAiVisibilityReport {
   image_seo_audit: PublicImageSeoAudit;
   eeat_audit: PublicEeatAudit;
   trust_signals_audit: PublicTrustSignalsAudit;
+  seo_tasks: SeoTask[];
   playground_questions: string[];
 }
 

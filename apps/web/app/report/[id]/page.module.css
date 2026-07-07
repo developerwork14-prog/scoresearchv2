@@ -933,6 +933,134 @@
 .issuePill:nth-child(1) { background: #FBEAEA; color: #DC2626; }
 .issuePill:nth-child(2) { background: #FBF1E3; color: #B8650A; }
 
+.taskTracker {
+  margin: 24px 0;
+  padding: 22px;
+}
+
+.taskSummary,
+.taskBadges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.taskSummary span,
+.taskBadges span {
+  border-radius: 999px;
+  background: #F2F2F2;
+  color: #666;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.taskSummary .taskPriorityHigh,
+.taskBadges .taskPriorityHigh {
+  background: #FBEAEA;
+  color: #DC2626;
+}
+
+.taskSummary .taskPriorityMedium,
+.taskBadges .taskPriorityMedium {
+  background: #FBF1E3;
+  color: #B8650A;
+}
+
+.taskSummary .taskPriorityLow,
+.taskBadges .taskPriorityLow {
+  background: #F2F2F2;
+  color: #777;
+}
+
+.taskList {
+  display: grid;
+  gap: 10px;
+}
+
+.taskItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  padding: 16px;
+}
+
+.taskMain {
+  min-width: 0;
+}
+
+.taskMain h3 {
+  margin: 10px 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.taskMain p {
+  margin: 0;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.taskMain small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.taskMeta {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  padding-left: 16px;
+}
+
+.taskMeta b {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.taskMeta span,
+.taskMeta em {
+  color: var(--secondary);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.taskMeta em {
+  color: #111;
+  font-weight: 700;
+}
+
+.taskEmpty {
+  border: 1px dashed var(--border-hover);
+  border-radius: 10px;
+  padding: 18px;
+}
+
+.taskEmpty h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.taskEmpty p {
+  margin: 0;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .sectionHead {
   display: flex;
   align-items: end;
@@ -2127,6 +2255,7 @@
   .kpiGrid,
   .engineGrid,
   .priorityList,
+  .taskItem,
   .checkColumns,
   .coreVitalsGrid,
   .auditSummaryGrid {
@@ -2170,6 +2299,7 @@
   .kpiGrid,
   .engineGrid,
   .priorityList,
+  .taskItem,
   .checkColumns,
   .coreVitalsGrid,
   .auditSummaryGrid,

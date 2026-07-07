@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Bot, FileText, MapPin, Search, Video } from "lucide-react";
-import type { StructuredAiVisibilityReport } from "@aiva/core";
+import type { SeoTask, StructuredAiVisibilityReport } from "@aiva/core";
 import { API_BASE, getReport } from "@/lib/api";
 import { CHATGPT_CITATION_CATEGORIES, GEMINI_CITATION_CATEGORIES } from "@/lib/audit-citation-categories";
 import { CallbackModal } from "@/components/callback-modal";
@@ -79,6 +79,7 @@ type GeoIssueCategory = CategoryLike & {
   skippedCheckDetails?: { name?: string; reason?: string }[];
 };
 type AiPlatform = "chatgpt" | "gemini" | "geo" | "overall";
+type TaskPriority = SeoTask["priority"];
 
 const strategyItems = [
   { label: "SEO", icon: Search },
@@ -87,6 +88,21 @@ const strategyItems = [
   { label: "AI Visibility", icon: Bot },
   { label: "Video Search", icon: Video }
 ];
+
+const priorityLabels: Record<TaskPriority, string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low"
+};
+
+const ownerLabels: Record<SeoTask["ownerTeam"], string> = {
+  technical: "Technical",
+  content: "Content",
+  developer: "Developer",
+  design: "Design",
+  analytics: "Analytics",
+  seo: "SEO"
+};
 
 const statusMeta: Record<Status, { icon: string; className: string }> = {
   Passed: { icon: "OK", className: styles.passed },
@@ -266,6 +282,74 @@ function formatDecimal(value?: number) {
 function formatScore(value?: number) {
   if (value === undefined || !Number.isFinite(value)) return "N/A";
   return `${Math.round(value)}%`;
+}
+
+function taskPriorityClass(priority: TaskPriority) {
+  if (priority === "high") return styles.taskPriorityHigh;
+  if (priority === "medium") return styles.taskPriorityMedium;
+  return styles.taskPriorityLow;
+}
+
+function statusText(value: SeoTask["status"]) {
+  return value.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+function taskEvidencePreview(value: unknown) {
+  const text = evidenceText(value).replace(/\s+/g, " ").trim();
+  return text.length <= 140 ? text : `${text.slice(0, 139).trimEnd()}…`;
+}
+
+function SeoTaskTracker({ tasks }: { tasks: SeoTask[] }) {
+  const visibleTasks = tasks.slice(0, 8);
+  const counts = tasks.reduce<Record<TaskPriority, number>>((total, task) => {
+    total[task.priority] += 1;
+    return total;
+  }, { high: 0, medium: 0, low: 0 });
+
+  return (
+    <section className={`${styles.card} ${styles.taskTracker}`}>
+      <div className={styles.cardTitle}>
+        <div>
+          <h2>SEO Fix Tracker</h2>
+          <p>{tasks.length} assignable tasks generated from failed audit checks.</p>
+        </div>
+        <div className={styles.taskSummary}>
+          <span className={styles.taskPriorityHigh}>{counts.high} high</span>
+          <span className={styles.taskPriorityMedium}>{counts.medium} medium</span>
+          <span className={styles.taskPriorityLow}>{counts.low} low</span>
+        </div>
+      </div>
+
+      {visibleTasks.length ? (
+        <div className={styles.taskList}>
+          {visibleTasks.map((task) => (
+            <article key={task.id} className={styles.taskItem}>
+              <div className={styles.taskMain}>
+                <div className={styles.taskBadges}>
+                  <span className={taskPriorityClass(task.priority)}>{priorityLabels[task.priority]}</span>
+                  <span>{ownerLabels[task.ownerTeam]}</span>
+                  <span>{statusText(task.status)}</span>
+                </div>
+                <h3>{task.issueTitle}</h3>
+                <p>{task.issueDescription}</p>
+                {taskEvidencePreview(task.evidence) ? <small>{taskEvidencePreview(task.evidence)}</small> : null}
+              </div>
+              <div className={styles.taskMeta}>
+                <b>{task.auditArea}</b>
+                <span>{task.checkGroup}</span>
+                <em>{task.affectedPages.length ? `${task.affectedPages.length} affected ${task.affectedPages.length === 1 ? "page" : "pages"}` : "Sitewide task"}</em>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className={styles.taskEmpty}>
+          <h3>No assignable SEO tasks</h3>
+          <p>Passed, skipped, informational, and non-applicable checks are excluded from the task tracker.</p>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function scoreTone(score: number) {
@@ -1633,7 +1717,8 @@ export default function ReportPage() {
     const auditScores = tabList.filter((tab) => tab.available).map((tab) => tab.score);
     const issueTrend = buildIssueTrend(issueCounts, aiVisibilityScore);
     const lastAuditedAt = report.created_at ?? tabList.map((tab) => tab.checkedAt).find(Boolean);
-    return { tabs, aiVisibilityScore, issueCounts, issueTrend, openIssues, priority, nextPriority, auditScores, lastAuditedAt };
+    const seoTasks = report.seo_tasks ?? [];
+    return { tabs, aiVisibilityScore, issueCounts, issueTrend, openIssues, priority, nextPriority, auditScores, lastAuditedAt, seoTasks };
   }, [report]);
 
   if (error) {
@@ -1644,7 +1729,7 @@ export default function ReportPage() {
     return <main className={styles.page}><div className={styles.container}><article className={styles.card} style={{ padding: 24 }}>Loading report...</article></div></main>;
   }
 
-  const { tabs, aiVisibilityScore, issueCounts, issueTrend, openIssues, priority, nextPriority, auditScores, lastAuditedAt } = derived;
+  const { tabs, aiVisibilityScore, issueCounts, issueTrend, openIssues, priority, nextPriority, auditScores, lastAuditedAt, seoTasks } = derived;
   const auditNav = Object.keys(tabs) as AuditTabId[];
   const activeAuditTab = active === "overview" ? null : tabs[active];
   const priorityIssues = priorityIssueGroups(priority);
@@ -1795,6 +1880,8 @@ export default function ReportPage() {
           <div><h2>Visibility Opportunities</h2><p>{openIssues} prioritized findings across this audit.</p></div>
           <div><span className={styles.issuePill}><i className={styles.high} />High impact {issueCounts.high}</span><span className={styles.issuePill}><i className={styles.medium} />Medium {issueCounts.medium}</span><span className={styles.issuePill}><i />Low {issueCounts.low}</span></div>
         </section>
+
+        <SeoTaskTracker tasks={seoTasks} />
 
         <section>
           <div className={styles.sectionHead}><h2>Scores by category</h2><p>Current score distribution from the latest audit</p></div>
