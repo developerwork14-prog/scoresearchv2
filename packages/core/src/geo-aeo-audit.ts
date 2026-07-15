@@ -825,6 +825,25 @@ function indexNowCandidateUrls(origin: string, robotsText: string, html: string)
   return [...urls].slice(0, 4);
 }
 
+function sitemapFeedCandidates(origin: string, robotsText: string) {
+  const fromRobots = [...(robotsText.matchAll(/^sitemap:\s*(.+)$/gim) ?? [])]
+    .map((match) => {
+      try {
+        return new URL(match[1].trim(), origin).toString();
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean);
+  return [...new Set([
+    ...fromRobots,
+    `${origin}/sitemap.xml`,
+    `${origin}/sitemap_index.xml`,
+    `${origin}/sitemap-index.xml`,
+    `${origin}/wp-sitemap.xml`
+  ])];
+}
+
 async function indexNowEvidence(origin: string, robotsText: string, html: string) {
   const candidates = indexNowCandidateUrls(origin, robotsText, html);
   const responses = await Promise.all(candidates.map(async (href) => {
@@ -840,15 +859,177 @@ async function indexNowEvidence(origin: string, robotsText: string, html: string
   };
 }
 
-function bingWmtEvidence(kind: "index" | "sitemap", hostname: string, sitemapUrls: string[]) {
+function normalizeComparableUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString().replace(/\/$/, "").toLowerCase();
+  } catch {
+    return value.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+function bingWmtApiKey() {
+  return process.env.BING_WEBMASTER_API_KEY?.trim() ?? "";
+}
+
+async function bingWmtRequest(method: string, params: Record<string, string> = {}, init?: RequestInit) {
+  const apiKey = bingWmtApiKey();
+  if (!apiKey) {
+    return {
+      skipped: true,
+      reason: "Bing Webmaster Tools API verification requires BING_WEBMASTER_API_KEY.",
+      requiredEnv: ["BING_WEBMASTER_API_KEY"]
+    };
+  }
+
+  const url = new URL(`https://ssl.bing.com/webmaster/api.svc/json/${method}`);
+  url.searchParams.set("apikey", apiKey);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: init?.method ?? "GET",
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        accept: "application/json",
+        ...(init?.body ? { "content-type": "application/json; charset=utf-8" } : {}),
+        ...(init?.headers ?? {})
+      },
+      body: init?.body
+    });
+    const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+    return { ok: response.ok, status: response.status, data };
+  } catch (error) {
+    return {
+      skipped: true,
+      reason: "Bing Webmaster Tools API request failed in this crawl environment.",
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+function bingPayloadData(data: unknown): unknown {
+  if (!data || typeof data !== "object") return data;
+  return (data as Record<string, unknown>).d ?? data;
+}
+
+function bingSiteUrlCandidates(inputUrl: string) {
+  const parsed = new URL(inputUrl);
+  const host = parsed.hostname.replace(/^www\./, "");
+  return [
+    `${parsed.protocol}//${parsed.hostname}/`,
+    `${parsed.protocol}//${host}/`,
+    `https://${parsed.hostname}/`,
+    `https://${host}/`,
+    `http://${parsed.hostname}/`,
+    `http://${host}/`,
+    `domain:${host}`
+  ];
+}
+
+function siteUrlFromRecord(record: unknown) {
+  if (!record || typeof record !== "object") return "";
+  const item = record as Record<string, unknown>;
+  return String(item.Url ?? item.url ?? item.SiteUrl ?? item.siteUrl ?? "");
+}
+
+function siteVerifiedFromRecord(record: unknown) {
+  if (!record || typeof record !== "object") return false;
+  const item = record as Record<string, unknown>;
+  return item.IsVerified === true || item.isVerified === true || String(item.IsVerified ?? item.isVerified).toLowerCase() === "true";
+}
+
+async function bingVerifiedSiteFor(inputUrl: string) {
+  const sitesResponse = await bingWmtRequest("GetUserSites");
+  if ("skipped" in sitesResponse) return sitesResponse;
+  const sites = bingPayloadData(sitesResponse.data);
+  const siteRecords = Array.isArray(sites) ? sites : [];
+  const candidates = bingSiteUrlCandidates(inputUrl).map(normalizeComparableUrl);
+  const verified = siteRecords
+    .filter(siteVerifiedFromRecord)
+    .map((record) => ({ record, siteUrl: siteUrlFromRecord(record) }))
+    .filter((item) => item.siteUrl);
+  const match = verified.find((item) => candidates.includes(normalizeComparableUrl(item.siteUrl)));
+  if (!match) {
+    return {
+      skipped: true,
+      reason: "No matching verified site property was found in Bing Webmaster Tools for this audited URL.",
+      requestedUrl: inputUrl,
+      candidateSiteUrls: bingSiteUrlCandidates(inputUrl),
+      verifiedSiteUrls: verified.map((item) => item.siteUrl).slice(0, 10)
+    };
+  }
+  return { siteUrl: match.siteUrl, userSitesChecked: siteRecords.length };
+}
+
+function bingUrlInfoPass(info: Record<string, unknown>) {
+  return Boolean(
+    info.IsPage === true
+    || Number(info.HttpStatus) >= 200 && Number(info.HttpStatus) < 400
+    || Number(info.DocumentSize) > 0
+    || String(info.LastCrawledDate ?? "").trim()
+    || String(info.DiscoveryDate ?? "").trim()
+  );
+}
+
+async function bingWmtIndexEvidence(inputUrl: string) {
+  const site = await bingVerifiedSiteFor(inputUrl);
+  if (!("siteUrl" in site)) return site;
+  const siteUrl = String(site.siteUrl);
+  const response = await bingWmtRequest("GetUrlInfo", { siteUrl, url: JSON.stringify(inputUrl) });
+  if ("skipped" in response && response.skipped) return response;
+  const payload = bingPayloadData(response.data);
+  const info = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
   return {
-    skipped: true,
-    hostname,
-    sitemapUrlsFound: sitemapUrls.length,
-    requiredEnv: ["BING_WEBMASTER_API_KEY"],
-    reason: process.env.BING_WEBMASTER_API_KEY
-      ? `BING_WEBMASTER_API_KEY is configured, but Bing Webmaster Tools ${kind === "index" ? "URL index" : "sitemap list"} API integration is not implemented in this runtime.`
-      : `Bing Webmaster Tools ${kind === "index" ? "URL index" : "sitemap list"} verification requires BING_WEBMASTER_API_KEY.`
+    pass: response.ok && bingUrlInfoPass(info),
+    status: response.status,
+    siteUrl,
+    url: inputUrl,
+    userSitesChecked: site.userSitesChecked,
+    urlInfo: {
+      Url: info.Url ?? "",
+      IsPage: info.IsPage ?? null,
+      HttpStatus: info.HttpStatus ?? null,
+      DocumentSize: info.DocumentSize ?? null,
+      DiscoveryDate: info.DiscoveryDate ?? "",
+      LastCrawledDate: info.LastCrawledDate ?? "",
+      TotalChildUrlCount: info.TotalChildUrlCount ?? null
+    },
+    ...(response.ok ? {} : { error: response.data })
+  };
+}
+
+function feedUrlFromRecord(record: unknown) {
+  if (!record || typeof record !== "object") return "";
+  const item = record as Record<string, unknown>;
+  return String(item.Url ?? item.url ?? item.FeedUrl ?? item.feedUrl ?? "");
+}
+
+async function bingWmtSitemapEvidence(inputUrl: string, sitemapUrls: string[]) {
+  const site = await bingVerifiedSiteFor(inputUrl);
+  if (!("siteUrl" in site)) return { ...site, sitemapUrlsFound: sitemapUrls.length };
+  const siteUrl = String(site.siteUrl);
+  const response = await bingWmtRequest("GetFeeds", { siteUrl });
+  if ("skipped" in response && response.skipped) return { ...response, sitemapUrlsFound: sitemapUrls.length };
+  const payload = bingPayloadData(response.data);
+  const feeds = Array.isArray(payload) ? payload : [];
+  const submitted = feeds.map(feedUrlFromRecord).filter(Boolean);
+  const submittedSet = new Set(submitted.map(normalizeComparableUrl));
+  const discovered = [...new Set(sitemapUrls.filter(Boolean))];
+  const missing = discovered.filter((href) => !submittedSet.has(normalizeComparableUrl(href)));
+  return {
+    pass: response.ok && submitted.length > 0 && (discovered.length === 0 || missing.length < discovered.length),
+    status: response.status,
+    siteUrl,
+    userSitesChecked: site.userSitesChecked,
+    discoveredSitemaps: discovered.slice(0, 20),
+    submittedSitemaps: submitted.slice(0, 20),
+    missingSitemaps: missing.slice(0, 20),
+    feedCount: feeds.length,
+    ...(response.ok ? {} : { error: response.data })
   };
 }
 
@@ -1262,17 +1443,6 @@ function canonicalHref(html: string, baseUrl: string, response?: Response | null
     return new URL(href, baseUrl).toString();
   } catch {
     return "";
-  }
-}
-
-function normalizeComparableUrl(value: string) {
-  try {
-    const parsed = new URL(value);
-    parsed.hash = "";
-    parsed.search = "";
-    return parsed.toString().replace(/\/$/, "");
-  } catch {
-    return value.replace(/\/$/, "");
   }
 }
 
@@ -1949,8 +2119,11 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
     ...directTrustCandidates
   ]);
   const indexNow = await indexNowEvidence(origin, robotsText, pageHtml);
-  const bingWmtIndex = bingWmtEvidence("index", url.hostname, sitemapAndPageUrls);
-  const bingWmtSitemaps = bingWmtEvidence("sitemap", url.hostname, sitemapAndPageUrls);
+  const sitemapFeedUrls = sitemapFeedCandidates(origin, robotsText);
+  const [bingWmtIndex, bingWmtSitemaps] = await Promise.all([
+    bingWmtIndexEvidence(normalizedUrl),
+    bingWmtSitemapEvidence(normalizedUrl, sitemapFeedUrls)
+  ]);
   const bingPlaces = bingPlacesEvidence(url.hostname, bodyText);
   const geminiWaf = geminiWafEvidence(googleExtendedPage);
   const ipRangeEvidence = {
@@ -2334,8 +2507,20 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
       recommendation: "Make the affected citable content visible without requiring login, subscription, membership, or registration."
     });
   }
-  addSkippedCheck(result, 104, JSON.stringify(bingWmtIndex));
-  addSkippedCheck(result, 105, JSON.stringify(bingWmtSitemaps));
+  if ("pass" in bingWmtIndex) {
+    addCheck(result, 104, Boolean(bingWmtIndex.pass), JSON.stringify(bingWmtIndex), {
+      recommendation: "Verify the site property in Bing Webmaster Tools and confirm the audited URL has Bing discovery or crawl evidence."
+    });
+  } else {
+    addSkippedCheck(result, 104, JSON.stringify(bingWmtIndex));
+  }
+  if ("pass" in bingWmtSitemaps) {
+    addCheck(result, 105, Boolean(bingWmtSitemaps.pass), JSON.stringify(bingWmtSitemaps), {
+      recommendation: "Submit the discovered XML sitemap in Bing Webmaster Tools and wait for Bing to process it."
+    });
+  } else {
+    addSkippedCheck(result, 105, JSON.stringify(bingWmtSitemaps));
+  }
   addCheck(result, 106, indexNow.pass, JSON.stringify(indexNow), {
     warning: !indexNow.pass,
     priorityScore: 10,
