@@ -5,7 +5,12 @@ import { useParams, useRouter } from "next/navigation";
 import { Bot, FileText, MapPin, Search, Video } from "lucide-react";
 import type { StructuredAiVisibilityReport } from "@aiva/core";
 import { API_BASE, getReport } from "@/lib/api";
-import { CHATGPT_CITATION_CATEGORIES, GEMINI_CITATION_CATEGORIES } from "@/lib/audit-citation-categories";
+import {
+  CHATGPT_CITATION_CATEGORIES,
+  CHATGPT_CITATION_CHECK_IDS,
+  GEMINI_CITATION_CATEGORIES,
+  GEMINI_CITATION_CHECK_IDS
+} from "@/lib/audit-citation-categories";
 import { CallbackModal } from "@/components/callback-modal";
 import { PlatformBrandIcon } from "@/components/platform-brand-icon";
 import styles from "./page.module.css";
@@ -748,6 +753,46 @@ function skippedReasonText(check: CheckLike) {
 function checksForCategories(checks: CheckLike[], categories: CategoryLike[]) {
   const categoryNames = new Set(categories.map((category) => category.categoryName));
   return checks.filter((check) => check.category && categoryNames.has(check.category));
+}
+
+function checksForIdsOrCategories(checks: CheckLike[], ids: readonly number[], categories: readonly string[]) {
+  const idSet = new Set<number>(ids);
+  const categorySet = new Set<string>(categories);
+  return checks.filter((check) => typeof check.id === "number"
+    ? idSet.has(check.id)
+    : Boolean(check.category && categorySet.has(check.category)));
+}
+
+function categoriesFromChecks(checks: CheckLike[], order: readonly string[]): CategoryLike[] {
+  const unorderedCategories = checks
+    .map((check) => check.category)
+    .filter((categoryName): categoryName is string => Boolean(categoryName))
+    .filter((categoryName) => !order.includes(categoryName));
+  const categoryNames = [
+    ...order.filter((categoryName) => checks.some((check) => check.category === categoryName)),
+    ...unorderedCategories
+  ];
+  return [...new Set(categoryNames)].map((categoryName) => {
+    const categoryChecks = checks.filter((check) => check.category === categoryName);
+    const scorable = categoryChecks.filter((check) => !check.skipped);
+    const failedChecks = scorable.filter((check) => !check.passed && !check.warning && !check.informational).length;
+    const warningChecks = scorable.filter((check) => check.warning || check.informational).length;
+    const passedChecks = scorable.filter((check) => check.passed).length;
+    const skippedChecks = categoryChecks.filter((check) => check.skipped).length;
+    const score = scorable.length
+      ? clampScore((scorable.filter((check) => check.passed || check.warning || check.informational).length / scorable.length) * 100)
+      : 100;
+    return {
+      categoryName,
+      totalChecks: categoryChecks.length,
+      passedChecks,
+      failedChecks,
+      warningChecks,
+      skippedChecks,
+      score,
+      status: scorable.length === 0 ? "Skipped" : warningChecks > 0 && failedChecks === 0 ? "Minor Attention" : statusFor(score)
+    };
+  });
 }
 
 function pushUniqueUrl(urls: string[], value: unknown) {
@@ -1585,12 +1630,18 @@ export default function ReportPage() {
     const technical = report.technical_categories ?? [];
     const geoAll = report.geo_aeo_audit?.categories ?? [];
     const geoChecks = report.geo_aeo_audit?.checks ?? [];
-    const geo = geoAll.filter((category) => !CHATGPT_CITATION_CATEGORIES.includes(category.categoryName) && !GEMINI_CITATION_CATEGORIES.includes(category.categoryName) && category.categoryName !== "ChatGPT Citation" && category.categoryName !== "Gemini Citation");
-    const citation = geoAll.filter((category) => CHATGPT_CITATION_CATEGORIES.includes(category.categoryName) || category.categoryName === "ChatGPT Citation");
-    const gemini = geoAll.filter((category) => GEMINI_CITATION_CATEGORIES.includes(category.categoryName) || category.categoryName === "Gemini Citation");
-    const geoTabChecks = checksForCategories(geoChecks, geo);
-    const citationChecks = checksForCategories(geoChecks, citation);
-    const geminiChecks = checksForCategories(geoChecks, gemini);
+    const citationChecks = checksForIdsOrCategories(geoChecks, CHATGPT_CITATION_CHECK_IDS, CHATGPT_CITATION_CATEGORIES);
+    const geminiChecks = checksForIdsOrCategories(geoChecks, GEMINI_CITATION_CHECK_IDS, GEMINI_CITATION_CATEGORIES);
+    const citationCheckIds = new Set(citationChecks.map((check) => check.id).filter((id): id is number => typeof id === "number"));
+    const geminiCheckIds = new Set(geminiChecks.map((check) => check.id).filter((id): id is number => typeof id === "number"));
+    const geoTabChecks = geoChecks.filter((check) => typeof check.id === "number"
+      ? !citationCheckIds.has(check.id) && !geminiCheckIds.has(check.id)
+      : Boolean(check.category && !CHATGPT_CITATION_CATEGORIES.includes(check.category) && !GEMINI_CITATION_CATEGORIES.includes(check.category)));
+    const geoCategoryOrder = geoAll.map((category) => category.categoryName)
+      .filter((categoryName) => !CHATGPT_CITATION_CATEGORIES.includes(categoryName) && !GEMINI_CITATION_CATEGORIES.includes(categoryName) && categoryName !== "ChatGPT Citation" && categoryName !== "Gemini Citation");
+    const geo = categoriesFromChecks(geoTabChecks, geoCategoryOrder);
+    const citation = categoriesFromChecks(citationChecks, CHATGPT_CITATION_CATEGORIES);
+    const gemini = categoriesFromChecks(geminiChecks, GEMINI_CITATION_CATEGORIES);
     const crawlability = technical.filter((category) => ["Robots.txt & Sitemap", "Indexability & Crawlability", "Internal Linking", "AI Crawl Readiness"].includes(category.categoryName));
     const crawlabilityChecks = checksForCategories(report.technical_audit?.checks ?? [], crawlability);
     const structuredDataCategories = report.structured_data_audit?.categories ?? [];

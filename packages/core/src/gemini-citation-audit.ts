@@ -8,6 +8,7 @@ export const GEMINI_CITATION_CATEGORIES = [
 ] as const;
 
 export const GEMINI_CITATION_CATEGORY_SET = new Set<string>(GEMINI_CITATION_CATEGORIES);
+export const GEMINI_CITATION_CHECK_IDS = new Set<number>([67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78]);
 
 export const GEMINI_CITATION_RECOMMENDATIONS: Record<number, string> = {
   67: "Allow Google-Extended in robots.txt when Gemini citation visibility is desired.",
@@ -26,4 +27,8 @@ export const GEMINI_CITATION_RECOMMENDATIONS: Record<number, string> = {
 
 export function isGeminiCitationCategory(categoryName: string) {
   return GEMINI_CITATION_CATEGORY_SET.has(categoryName);
+}
+
+export function isGeminiCitationCheck(id: number, categoryName: string) {
+  return GEMINI_CITATION_CHECK_IDS.has(id) || (categoryName !== "Robots & Bot Access" && isGeminiCitationCategory(categoryName));
 }

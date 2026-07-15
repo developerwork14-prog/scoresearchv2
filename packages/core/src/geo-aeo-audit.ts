@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import { scoreParameterOutcomes } from "./audit-outcome.js";
-import { CHATGPT_CITATION_RECOMMENDATIONS, isChatgptCitationCategory } from "./chatgpt-citation-audit.js";
-import { GEMINI_CITATION_RECOMMENDATIONS, isGeminiCitationCategory } from "./gemini-citation-audit.js";
+import { CHATGPT_CITATION_RECOMMENDATIONS, isChatgptCitationCheck } from "./chatgpt-citation-audit.js";
+import { GEMINI_CITATION_RECOMMENDATIONS, isGeminiCitationCheck } from "./gemini-citation-audit.js";
 import { crawlSite, fetchSitemapUrls } from "./site-crawler.js";
 
 export type GeoAeoSeverity = "BLOCKER" | "MAJOR" | "MINOR" | "ADVISORY";
@@ -112,9 +112,9 @@ const CHECKS: GeoAeoCheckDefinition[] = [
   { id: 35, category: "Structured Data Integrity", name: "FAQ schema-DOM match", severity: "BLOCKER", scope: "page" },
   { id: 36, category: "Structured Data Integrity", name: "Product schema-DOM match", severity: "BLOCKER", scope: "page" },
   { id: 37, category: "Structured Data Integrity", name: "Schema consistency validation", severity: "BLOCKER", scope: "page" },
-  { id: 38, category: "Crawlability", name: "OAI-SearchBot allowed", severity: "BLOCKER", scope: "domain" },
-  { id: 39, category: "Crawlability", name: "ChatGPT-User allowed", severity: "BLOCKER", scope: "domain" },
-  { id: 40, category: "Crawlability", name: "GPTBot rules do not block OAI agents", severity: "MAJOR", scope: "domain" },
+  { id: 38, category: "Robots & Bot Access", name: "OAI-SearchBot Allowed", severity: "BLOCKER", scope: "domain" },
+  { id: 39, category: "Robots & Bot Access", name: "ChatGPT-User Allowed", severity: "BLOCKER", scope: "domain" },
+  { id: 40, category: "General", name: "GPTBot Intentional Check", severity: "MAJOR", scope: "domain" },
   { id: 41, category: "Crawlability", name: "WAF not challenging OAI agents", severity: "BLOCKER", scope: "domain" },
   { id: 42, category: "Technical Access", name: "No paywall on citable content", severity: "MAJOR", scope: "page" },
   { id: 49, category: "Content Opportunities", name: "Alternatives and comparison pages", severity: "ADVISORY", scope: "domain" },
@@ -135,7 +135,19 @@ const CHECKS: GeoAeoCheckDefinition[] = [
   { id: 75, category: "Media & Visuals", name: "Stock photo detection", severity: "MINOR", scope: "page" },
   { id: 76, category: "Media & Visuals", name: "OCR legibility", severity: "MINOR", scope: "page" },
   { id: 77, category: "Schema & Technical", name: "VideoObject schema", severity: "MINOR", scope: "page" },
-  { id: 78, category: "Media & Visuals", name: "Transcript-HTML alignment", severity: "MAJOR", scope: "page" }
+  { id: 78, category: "Media & Visuals", name: "Transcript-HTML alignment", severity: "MAJOR", scope: "page" },
+  { id: 104, category: "Indexability", name: "Bing Index Presence", severity: "MAJOR", scope: "domain" },
+  { id: 105, category: "Indexability", name: "Bing WMT Sitemap Submission", severity: "MAJOR", scope: "domain" },
+  { id: 106, category: "Indexability", name: "IndexNow Protocol Implementation", severity: "MINOR", scope: "domain" },
+  { id: 107, category: "Indexability", name: "Bing Places Listing", severity: "MINOR", scope: "domain" },
+  { id: 108, category: "Content Structure", name: "H2 Intent Flow", severity: "MINOR", scope: "page" },
+  { id: 109, category: "Content Structure", name: "Comparison/vs Page Detection", severity: "ADVISORY", scope: "domain" },
+  { id: 110, category: "E-commerce Signals", name: "Product Schema Completeness", severity: "MAJOR", scope: "page" },
+  { id: 111, category: "E-commerce Signals", name: "Price-Stock-Feed Sync", severity: "MAJOR", scope: "page" },
+  { id: 112, category: "E-commerce Signals", name: "Review Volume & Freshness", severity: "MINOR", scope: "page" },
+  { id: 113, category: "E-commerce Signals", name: "Review Diversity Check", severity: "MINOR", scope: "page" },
+  { id: 114, category: "E-commerce Signals", name: "Merchant Trust Pages", severity: "MAJOR", scope: "domain" },
+  { id: 115, category: "E-commerce Signals", name: "Product Comparison Pages", severity: "ADVISORY", scope: "domain" }
 ];
 
 const CATEGORY_ORDER = [
@@ -147,9 +159,12 @@ const CATEGORY_ORDER = [
   "Local GEO Signals",
   "AI Crawlability",
   "Structured Data Integrity",
+  "General",
+  "Indexability",
   "Crawlability",
   "Technical Access",
   "Content Structure",
+  "E-commerce Signals",
   "Content Quality",
   "Content Opportunities",
   "Gemini Crawlability",
@@ -169,9 +184,12 @@ const CATEGORY_WEIGHTS: Record<string, number> = {
   "Local GEO Signals": 15,
   "AI Crawlability": 5,
   "Structured Data Integrity": 5,
+  "General": 2,
+  "Indexability": 5,
   "Crawlability": 7,
   "Technical Access": 3,
   "Content Structure": 2,
+  "E-commerce Signals": 3,
   "Content Quality": 3,
   "Gemini Crawlability": 6,
   "Local & E-Commerce": 2,
@@ -679,6 +697,172 @@ function alternativesPageDetection(pages: LocalPageHtml[], urls: string[]) {
   const score = strongSignals.length ? 10 : partialSignals.length ? 5 : 0;
 
   return { found: score > 0, signals, score };
+}
+
+function h2IntentFlowEvidence(h2s: string[]) {
+  const stages = [
+    { name: "problem", pattern: /\b(what|why|problem|challenge|need)\b/i },
+    { name: "solution", pattern: /\b(how|solution|feature|service|works)\b/i },
+    { name: "proof", pattern: /\b(benefit|result|case|proof|review|testimonial)\b/i },
+    { name: "comparison", pattern: /\b(compare|comparison|vs|versus|alternative|pricing)\b/i },
+    { name: "questions", pattern: /\b(faq|question|asked)\b/i },
+    { name: "action", pattern: /\b(next|start|buy|book|contact|demo|quote|apply)\b/i }
+  ];
+  const matched = stages
+    .filter((stage) => h2s.some((text) => stage.pattern.test(text)))
+    .map((stage) => stage.name);
+  const score = matched.length >= 4 ? 10 : matched.length >= 3 ? 6 : matched.length >= 2 ? 3 : 0;
+  return { pass: score >= 6, score, h2Count: h2s.length, matchedStages: matched, h2Samples: h2s.slice(0, 8) };
+}
+
+function ecommerceSignalEvidence(
+  productObjects: Record<string, unknown>[],
+  bodyText: string,
+  urls: string[],
+  currentUrl: string
+) {
+  const text = `${currentUrl} ${urls.slice(0, 30).join(" ")} ${bodyText.slice(0, 6000)}`;
+  const signals = [
+    ...(productObjects.length ? [`${productObjects.length} Product schema object${productObjects.length === 1 ? "" : "s"}`] : []),
+    ...(/\b(add to cart|checkout|buy now|shop now|sku|in stock|out of stock|quantity)\b/i.test(text) ? ["commerce UX text"] : []),
+    ...(/\b(?:rs\.?|inr|usd|\$|₹|€|£)\s?\d|\d[\d,.]*\s?(?:rs|inr|usd)\b/i.test(text) ? ["price text"] : []),
+    ...(/\/(?:products?|collections?|shop|cart|checkout)(?:\/|$)/i.test(text) ? ["commerce URL pattern"] : [])
+  ];
+  return { applicable: signals.length > 0, signals: compactSignals(signals), productSchemaObjects: productObjects.length };
+}
+
+function productSchemaCompletenessEvidence(records: Record<string, unknown>[]) {
+  const required = ["name", "brand", "offers", "price", "availability", "aggregateRating"];
+  const present = new Set<string>();
+  const visit = (record: Record<string, unknown>) => {
+    if (record.name) present.add("name");
+    if (record.brand) present.add("brand");
+    const offers = findObjects([record], (item) => Boolean(item.price || item.priceCurrency || item.availability));
+    if (record.offers || offers.length) present.add("offers");
+    if (offers.some((item) => item.price)) present.add("price");
+    if (offers.some((item) => item.availability)) present.add("availability");
+    if (record.aggregateRating || record.review) present.add("aggregateRating");
+  };
+  records.forEach(visit);
+  const missing = required.filter((field) => !present.has(field));
+  const percent = records.length ? Math.round((present.size / required.length) * 100) : 0;
+  return { pass: records.length > 0 && percent >= 70, productSchemaObjects: records.length, present: [...present], missing, percent };
+}
+
+function schemaOfferEvidence(records: Record<string, unknown>[]) {
+  const offers = findObjects(records, (record) => Boolean(record.price || record.priceCurrency || record.availability));
+  const prices = offers.map((offer) => String(offer.price ?? "").trim()).filter(Boolean);
+  const availability = offers.map((offer) => String(offer.availability ?? "").trim()).filter(Boolean);
+  return { offers: offers.length, prices: compactSignals(prices), availability: compactSignals(availability) };
+}
+
+function visiblePriceStockEvidence($: cheerio.CheerioAPI, bodyText: string) {
+  const pricePattern = /(?:₹|\$|€|£|rs\.?|inr|usd)\s?\d[\d,.]*|\d[\d,.]*\s?(?:rs|inr|usd)/gi;
+  const prices = compactSignals((bodyText.match(pricePattern) ?? []).map((item) => item.replace(/\s+/g, " ").trim()), 8);
+  const stockText = $("body").text().match(/\b(in stock|out of stock|sold out|available|unavailable|preorder|backorder)\b/gi) ?? [];
+  return { prices, stock: compactSignals(stockText.map((item) => item.toLowerCase()), 6) };
+}
+
+function priceStockSyncEvidence(records: Record<string, unknown>[], $: cheerio.CheerioAPI, bodyText: string) {
+  const schema = schemaOfferEvidence(records);
+  const visible = visiblePriceStockEvidence($, bodyText);
+  const schemaPriceVisible = schema.prices.length === 0 || schema.prices.some((price) => bodyText.includes(price));
+  const schemaAvailabilityVisible = schema.availability.length === 0
+    || schema.availability.some((value) => /instock/i.test(value) ? /\bin stock|available\b/i.test(bodyText) : /outofstock|soldout/i.test(value) ? /\bout of stock|sold out|unavailable\b/i.test(bodyText) : true);
+  return {
+    pass: schema.offers > 0 && schemaPriceVisible && schemaAvailabilityVisible,
+    schema,
+    visible,
+    feedChecked: false,
+    note: "Feed/API source was not connected; this validates visible page text against Product schema offers."
+  };
+}
+
+function reviewVolumeFreshnessEvidence(records: Record<string, unknown>[], bodyText: string) {
+  const reviewRecords = findObjects(records, (record) => Boolean(record.reviewCount || record.review || record.datePublished || record.dateCreated));
+  const reviewCounts = findObjects(records, (record) => Boolean(record.reviewCount))
+    .map((record) => Number(record.reviewCount))
+    .filter((count) => Number.isFinite(count));
+  const visibleReviewCount = Number((bodyText.match(/\b(\d{1,6})\s+(?:reviews?|ratings?)\b/i) ?? [])[1] ?? 0);
+  const dates = compactSignals([
+    ...(bodyText.match(/\b(?:20[2-3]\d)[-/](?:0?[1-9]|1[0-2])[-/](?:0?[1-9]|[12]\d|3[01])\b/g) ?? []),
+    ...(bodyText.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+20[2-3]\d\b/gi) ?? [])
+  ], 6);
+  const maxReviewCount = Math.max(0, ...reviewCounts, visibleReviewCount);
+  return {
+    pass: maxReviewCount > 0 && dates.length > 0,
+    maxReviewCount,
+    schemaReviewObjects: reviewRecords.length,
+    recentDateSignals: dates,
+    note: "Freshness is inferred from visible/schema date strings; no review-platform API is connected."
+  };
+}
+
+function reviewDiversityEntropyEvidence(records: Record<string, unknown>[]) {
+  const ratingValues = findObjects(records, (record) => Boolean(record.ratingValue || record.reviewRating))
+    .map((record) => Number(record.ratingValue ?? (record.reviewRating as Record<string, unknown> | undefined)?.ratingValue))
+    .filter((rating) => Number.isFinite(rating) && rating >= 1 && rating <= 5);
+  const buckets = [1, 2, 3, 4, 5].map((star) => ratingValues.filter((rating) => Math.round(rating) === star).length);
+  const total = buckets.reduce((sum, count) => sum + count, 0);
+  const entropy = total
+    ? -buckets.reduce((sum, count) => {
+      if (!count) return sum;
+      const probability = count / total;
+      return sum + probability * Math.log2(probability);
+    }, 0) / Math.log2(5)
+    : null;
+  const aggregate = reviewDiversity(records);
+  const pass = total >= 5 ? Number(entropy) >= 0.35 : !aggregate.suspiciousPerfect;
+  return { pass, ratingSamples: total, buckets, entropy: entropy === null ? null : Number(entropy.toFixed(2)), aggregate };
+}
+
+function indexNowCandidateUrls(origin: string, robotsText: string, html: string) {
+  const urls = new Set<string>();
+  const keyLocation = robotsText.match(/^key-location:\s*(.+)$/im)?.[1]?.trim();
+  if (keyLocation) urls.add(keyLocation.startsWith("http") ? keyLocation : `${origin}${keyLocation.startsWith("/") ? "" : "/"}${keyLocation}`);
+  const explicit = html.match(/https?:\/\/[^"'\s]+\/[a-f0-9-]{8,}\.txt/gi) ?? [];
+  explicit.forEach((item) => urls.add(item));
+  return [...urls].slice(0, 4);
+}
+
+async function indexNowEvidence(origin: string, robotsText: string, html: string) {
+  const candidates = indexNowCandidateUrls(origin, robotsText, html);
+  const responses = await Promise.all(candidates.map(async (href) => {
+    const result = await fetchText(href, 1800).catch(() => null);
+    return { url: href, status: result?.response.status ?? 0, keyFileValid: Boolean(result?.response.ok && result.text.trim().length >= 8) };
+  }));
+  return {
+    pass: responses.some((item) => item.keyFileValid),
+    candidates,
+    responses,
+    apiSubmitTested: false,
+    note: "This crawl verifies key-file discovery. Live IndexNow URL submission is not performed from the audit."
+  };
+}
+
+function bingWmtEvidence(kind: "index" | "sitemap", hostname: string, sitemapUrls: string[]) {
+  return {
+    skipped: true,
+    hostname,
+    sitemapUrlsFound: sitemapUrls.length,
+    requiredEnv: ["BING_WEBMASTER_API_KEY"],
+    reason: process.env.BING_WEBMASTER_API_KEY
+      ? `BING_WEBMASTER_API_KEY is configured, but Bing Webmaster Tools ${kind === "index" ? "URL index" : "sitemap list"} API integration is not implemented in this runtime.`
+      : `Bing Webmaster Tools ${kind === "index" ? "URL index" : "sitemap list"} verification requires BING_WEBMASTER_API_KEY.`
+  };
+}
+
+function bingPlacesEvidence(hostname: string, bodyText: string) {
+  const localSignals = /\b(address|phone|near me|hours|directions|store|clinic|office|branch)\b/i.test(bodyText);
+  return {
+    skipped: true,
+    hostname,
+    localSignals,
+    requiredEnv: ["BING_MAPS_API_KEY"],
+    reason: process.env.BING_MAPS_API_KEY
+      ? "BING_MAPS_API_KEY is configured, but Bing Places brand-search integration is not implemented in this runtime."
+      : "Bing Places listing verification requires BING_MAPS_API_KEY."
+  };
 }
 
 function useCasePageDetection(pages: LocalPageHtml[], urls: string[]) {
@@ -1751,13 +1935,23 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   const sitemapAndPageUrls = [...new Set([...crawled.sitemapUrls, ...extraSitemapUrls, ...sitePages.map((page) => page.url ?? "").filter(Boolean)])];
   const alternativesSignals = alternativesPageDetection(sitePages, sitemapAndPageUrls);
   const useCaseSignals = useCasePageDetection(sitePages, sitemapAndPageUrls);
+  const h2Intent = h2IntentFlowEvidence(h2s);
+  const ecommerceSignals = ecommerceSignalEvidence(productObjects, bodyText, sitemapAndPageUrls, normalizedUrl);
   const productFieldScore = productSchemaFieldScore(productObjects);
+  const productSchemaCompleteness = productSchemaCompletenessEvidence(productObjects);
+  const priceStockSync = priceStockSyncEvidence(productObjects, $, bodyText);
+  const reviewVolumeFreshness = reviewVolumeFreshnessEvidence(productObjects, bodyText);
   const reviewDiversitySignal = reviewDiversity(productObjects);
+  const reviewEntropy = reviewDiversityEntropyEvidence(productObjects);
   const merchantTrust = await merchantTrustEvidence([
     ...sitemapAndPageUrls.map((href) => ({ url: href, anchorText: "" })),
     ...footerTrustUrls(pageHtml, url),
     ...directTrustCandidates
   ]);
+  const indexNow = await indexNowEvidence(origin, robotsText, pageHtml);
+  const bingWmtIndex = bingWmtEvidence("index", url.hostname, sitemapAndPageUrls);
+  const bingWmtSitemaps = bingWmtEvidence("sitemap", url.hostname, sitemapAndPageUrls);
+  const bingPlaces = bingPlacesEvidence(url.hostname, bodyText);
   const geminiWaf = geminiWafEvidence(googleExtendedPage);
   const ipRangeEvidence = {
     skipped: true,
@@ -2140,6 +2334,24 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
       recommendation: "Make the affected citable content visible without requiring login, subscription, membership, or registration."
     });
   }
+  addSkippedCheck(result, 104, JSON.stringify(bingWmtIndex));
+  addSkippedCheck(result, 105, JSON.stringify(bingWmtSitemaps));
+  addCheck(result, 106, indexNow.pass, JSON.stringify(indexNow), {
+    warning: !indexNow.pass,
+    priorityScore: 10,
+    recommendation: "Publish an IndexNow key file and configure your CMS or deployment workflow to submit changed URLs."
+  });
+  addSkippedCheck(result, 107, JSON.stringify(bingPlaces));
+  addCheck(result, 108, h2Intent.pass, JSON.stringify(h2Intent), {
+    warning: !h2Intent.pass,
+    priorityScore: 15,
+    recommendation: "Use H2s that progress through problem, solution, proof, comparison, questions, and action where relevant."
+  });
+  if (alternativesSignals.score > 0) {
+    addCheck(result, 109, true, JSON.stringify(alternativesSignals));
+  } else {
+    addInformationalCheck(result, 109, JSON.stringify(alternativesSignals), "Create comparison, versus, or alternatives pages where this matches audience search intent.");
+  }
   if (alternativesSignals.score > 0) {
     addCheck(result, 49, true, JSON.stringify(alternativesSignals));
   } else {
@@ -2157,6 +2369,35 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   }
   addCheck(result, 54, !reviewDiversitySignal.suspiciousPerfect, reviewDiversitySignal.reviewCount ? `rating ${reviewDiversitySignal.ratingValue}, reviewCount ${reviewDiversitySignal.reviewCount}` : "No suspicious aggregateRating detected");
   addCheck(result, 55, merchantTrust.score > 0, JSON.stringify(merchantTrust));
+  if (!ecommerceSignals.applicable) {
+    const evidence = JSON.stringify({ skipped: true, notApplicable: true, reason: "E-commerce signals were not detected for this site.", ecommerceSignals });
+    [110, 111, 112, 113, 114, 115].forEach((id) => addNotApplicableCheck(result, id, evidence));
+  } else {
+    addCheck(result, 110, productSchemaCompleteness.pass, JSON.stringify({ ...productSchemaCompleteness, ecommerceSignals }));
+    addCheck(result, 111, priceStockSync.pass, JSON.stringify(priceStockSync), {
+      recommendation: "Align visible price and stock text with Product schema offers. Connect merchant/feed data for full three-source validation."
+    });
+    addCheck(result, 112, reviewVolumeFreshness.pass, JSON.stringify(reviewVolumeFreshness), {
+      warning: !reviewVolumeFreshness.pass,
+      priorityScore: 15,
+      recommendation: "Expose reviewCount and recent review dates in Product schema or visible review content."
+    });
+    if (reviewEntropy.ratingSamples === 0 && !reviewEntropy.aggregate.reviewCount) {
+      addSkippedCheck(result, 113, JSON.stringify({ ...reviewEntropy, skipped: true, reason: "No rating distribution or aggregate review count was detected." }));
+    } else {
+      addCheck(result, 113, reviewEntropy.pass, JSON.stringify(reviewEntropy), {
+        warning: !reviewEntropy.pass,
+        priorityScore: 15,
+        recommendation: "Expose a natural review distribution from real customer reviews; avoid only perfect aggregate ratings."
+      });
+    }
+    addCheck(result, 114, merchantTrust.score > 0, JSON.stringify(merchantTrust));
+    if (alternativesSignals.score > 0) {
+      addCheck(result, 115, true, JSON.stringify(alternativesSignals));
+    } else {
+      addInformationalCheck(result, 115, JSON.stringify(alternativesSignals), "Create product comparison, versus, or alternatives pages for relevant products and competitors.");
+    }
+  }
   addCheck(result, 65, !nosnippet, nosnippet ? "nosnippet/max-snippet/data-nosnippet found" : "No nosnippet restrictions found");
   if (renderedWords === null) {
     addSkippedCheck(result, 66, JSON.stringify({ error: renderedResult.error ?? "Rendered browser audit unavailable", skipped: true }));
@@ -2297,7 +2538,7 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   const pageScore = scoreByScope(result, "page");
   const domainScore = scoreByScope(result, "domain");
   const citationFailedDetails = result
-    .filter((check) => (isChatgptCitationCategory(check.category) || isGeminiCitationCategory(check.category)) && !check.passed && !check.skipped)
+    .filter((check) => (isChatgptCitationCheck(check.id, check.category) || isGeminiCitationCheck(check.id, check.category)) && !check.passed && !check.skipped)
     .map((check) => {
       const affected = affectedPagesFor(check);
       return {
@@ -2311,7 +2552,7 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
       };
     });
   const citationSkippedDetails = result
-    .filter((check) => (isChatgptCitationCategory(check.category) || isGeminiCitationCategory(check.category)) && check.skipped)
+    .filter((check) => (isChatgptCitationCheck(check.id, check.category) || isGeminiCitationCheck(check.id, check.category)) && check.skipped)
     .map((check) => ({
       id: check.id,
       name: check.name,
