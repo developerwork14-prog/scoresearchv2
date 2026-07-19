@@ -545,6 +545,8 @@ export interface PublicTechnicalAudit {
 export interface CoreWebVitalsSnapshot {
   website: string;
   performanceScore?: number;
+  mobilePerformanceScore?: number;
+  desktopPerformanceScore?: number;
   mobileLcp?: number;
   desktopLcp?: number;
   cls?: number;
@@ -554,7 +556,7 @@ export interface CoreWebVitalsSnapshot {
   speedIndex?: number;
   tbt?: number;
   checkedAt: string;
-  source?: "PageSpeed Insights" | "Crawl Timing";
+  source?: "PageSpeed Insights" | "Local Browser" | "Crawl Timing";
   unavailableReason?: string;
 }
 

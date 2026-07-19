@@ -1,3 +1,4 @@
+import * as tls from "node:tls";
 import * as cheerio from "cheerio";
 import { scoreParameterOutcomes, statusForParameterOutcomes } from "./audit-outcome.js";
 import { EeatAuditResult, EeatCategorySummary, EeatCheckResult, EeatSeverity, TechnicalCategoryStatus } from "./types.js";
@@ -31,7 +32,15 @@ const CHECKS: CheckDefinition[] = [
   [18, "Citations & Evidence", "Verifiable Claim Ratio", 2.65, "High"],
   [19, "Citations & Evidence", "Case Studies with Metrics", 2.65, "High"],
   [20, "Trust & Transparency", "Team Page Complete", 2.12, "High"],
-  [21, "Author & Expertise", "Author Experience Quantified", 2.12, "Medium"]
+  [21, "Author & Expertise", "Author Experience Quantified", 2.12, "Medium"],
+  [22, "Compliance & Disclosure", "YMYL Disclaimers", 2.65, "High"],
+  [23, "Trust Signals & Reviews", "Third-Party Review Widget", 2.12, "Medium"],
+  [24, "Trust Signals & Reviews", "Awards/Certifications Page", 1.59, "Medium"],
+  [25, "Trust Signals & Reviews", "Industry Certification Badges", 1.59, "Medium"],
+  [26, "Trust & Transparency", "About Links to Verification", 2.12, "High"],
+  [27, "Trust Signals & Reviews", "reviewedBy Schema", 2.12, "High"],
+  [28, "Trust Signals & Reviews", "GBP Review Response Rate", 2.12, "Medium"],
+  [29, "Technical Trust", "SSL Certificate OV/EV", 1.59, "Medium"]
 ].map(([id, category, name, weight, severity]) => ({ id, category, name, weight, severity })) as CheckDefinition[];
 
 const CATEGORY_ORDER = [...new Set(CHECKS.map((check) => check.category))];
@@ -214,6 +223,106 @@ function authoritativeOutboundLinks(links: string[]) {
   });
 }
 
+function jsonLdRecords($: cheerio.CheerioAPI): unknown[] {
+  const records: unknown[] = [];
+  $("script[type='application/ld+json']").each((_, el) => {
+    const raw = $(el).contents().text().trim();
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        records.push(...parsed);
+      } else {
+        records.push(parsed);
+      }
+    } catch {
+      // Invalid JSON-LD is covered by the structured data audit.
+    }
+  });
+  return records;
+}
+
+function hasPropertyDeep(value: unknown, property: string): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Object.prototype.hasOwnProperty.call(value, property)) return true;
+  if (Array.isArray(value)) return value.some((item) => hasPropertyDeep(item, property));
+  return Object.values(value as Record<string, unknown>).some((item) => hasPropertyDeep(item, property));
+}
+
+function ymylDetected(text: string, url: string) {
+  return /\b(doctor|medical|health|clinic|hospital|pharmacy|medicine|symptom|treatment|therapy|legal|lawyer|attorney|tax|loan|mortgage|insurance|investment|finance|financial|wealth|trading|credit|debt|retirement)\b/i.test(`${url} ${text}`);
+}
+
+function disclaimerDetected(text: string) {
+  return /\b(not (?:medical|legal|financial) advice|informational purposes only|consult (?:a|your) (?:doctor|physician|lawyer|attorney|financial advisor|tax advisor|professional)|risk disclosure|terms apply|eligibility criteria|past performance|licensed professional)\b/i.test(text);
+}
+
+function thirdPartyReviewSignals($: cheerio.CheerioAPI, text: string) {
+  const providers = new Set<string>();
+  const providerPattern = /\b(google reviews?|trustpilot|g2|capterra|clutch|yelp|facebook reviews?|reviews\.io|sitejabber|bbb|glassdoor|tripadvisor|zomato)\b/i;
+  if (providerPattern.test(text)) providers.add("text");
+  $("script[src],iframe[src],a[href]").each((_, el) => {
+    const source = `${$(el).attr("src") ?? ""} ${$(el).attr("href") ?? ""} ${$(el).text()}`;
+    const match = source.match(providerPattern);
+    if (match?.[1]) providers.add(match[1].toLowerCase());
+  });
+  return [...providers];
+}
+
+function certificationSignals($: cheerio.CheerioAPI, text: string) {
+  const matches = new Set<string>();
+  const pattern = /\b(iso\s?9001|iso\s?27001|soc\s?2|hipaa|pci\s?dss|gdpr|google partner|microsoft partner|shopify partner|meta business partner|bbb accredited|nabh|nabl|fda registered|certified|licensed|accredited)\b/i;
+  const textMatch = text.match(pattern);
+  if (textMatch?.[1]) matches.add(textMatch[1]);
+  $("img[alt],svg[aria-label],a[href]").each((_, el) => {
+    const source = `${$(el).attr("alt") ?? ""} ${$(el).attr("aria-label") ?? ""} ${$(el).attr("href") ?? ""} ${$(el).text()}`;
+    const match = source.match(pattern);
+    if (match?.[1]) matches.add(match[1]);
+  });
+  return [...matches];
+}
+
+function externalVerificationLinks($: cheerio.CheerioAPI, base: URL) {
+  return $("a[href]").toArray()
+    .map((el) => absolute(base, $(el).attr("href") ?? ""))
+    .filter((href) => href && !sameOrigin(base, href))
+    .filter((href) => /\b(linkedin\.com|crunchbase\.com|wikidata\.org|wikipedia\.org|google\.com\/maps|maps\.app\.goo\.gl|bbb\.org|trustpilot\.com|g2\.com|clutch\.co|schema\.org|iso\.org|soc2|aicpa|pci|hipaa|gov|edu)\b/i.test(href))
+    .slice(0, 10);
+}
+
+async function sslCertificateOrganization(url: URL) {
+  if (url.protocol !== "https:") {
+    return { checked: true, organization: "", issuer: "", validTo: "", error: "URL is not served over HTTPS." };
+  }
+  return new Promise<{ checked: boolean; organization: string; issuer: string; validTo: string; error?: string }>((resolve) => {
+    const socket = tls.connect({
+      host: url.hostname,
+      port: Number(url.port || 443),
+      servername: url.hostname,
+      timeout: 5000,
+      rejectUnauthorized: false
+    }, () => {
+      const certificate = socket.getPeerCertificate();
+      socket.end();
+      const subject = certificate.subject ?? {};
+      const issuer = certificate.issuer ?? {};
+      resolve({
+        checked: true,
+        organization: typeof subject.O === "string" ? subject.O : "",
+        issuer: typeof issuer.O === "string" ? issuer.O : "",
+        validTo: certificate.valid_to ?? ""
+      });
+    });
+    socket.on("timeout", () => {
+      socket.destroy();
+      resolve({ checked: false, organization: "", issuer: "", validTo: "", error: "TLS certificate lookup timed out." });
+    });
+    socket.on("error", (error) => {
+      resolve({ checked: false, organization: "", issuer: "", validTo: "", error: error.message });
+    });
+  });
+}
+
 export async function runEeatAudit(inputUrl: string, html?: string): Promise<EeatAuditResult> {
   const normalized = normalizeUrl(inputUrl);
   const base = new URL(normalized);
@@ -228,6 +337,7 @@ export async function runEeatAudit(inputUrl: string, html?: string): Promise<Eea
     team: findLink($, base, /team|people|leadership|authors/i),
     editorial: findLink($, base, /editorial|fact.check|review.policy|correction/i),
     caseStudy: findLink($, base, /case.stud|results|customer.story|success.story/i),
+    certification: findLink($, base, /awards?|certifications?|accredit|credentials?|recognition|press|security|compliance/i),
     article: findLink($, base, /blog|article|insight|news|guide/i)
   };
   const fetched = await Promise.all(Object.entries(links).map(async ([key, link]) => ({
@@ -260,24 +370,43 @@ export async function runEeatAudit(inputUrl: string, html?: string): Promise<Eea
   const bioText = bio$("body").text().replace(/\s+/g, " ").trim();
   const contact$ = cheerio.load(pageFor("contact"));
   const contactText = contact$("body").text().replace(/\s+/g, " ").trim();
-  const aboutText = cheerio.load(pageFor("about"))("body").text().replace(/\s+/g, " ").trim();
+  const about$ = cheerio.load(pageFor("about"));
+  const aboutText = about$("body").text().replace(/\s+/g, " ").trim();
   const privacyText = cheerio.load(pageFor("privacy"))("body").text().replace(/\s+/g, " ").trim();
   const termsText = cheerio.load(pageFor("terms"))("body").text().replace(/\s+/g, " ").trim();
   const team$ = cheerio.load(pageFor("team"));
   const teamText = team$("body").text().replace(/\s+/g, " ").trim();
   const caseText = cheerio.load(pageFor("caseStudy"))("body").text().replace(/\s+/g, " ").trim();
+  const certification$ = cheerio.load(pageFor("certification"));
+  const certificationText = certification$("body").text().replace(/\s+/g, " ").trim();
   const evidencePage$ = articleApplicable ? article$ : $;
+  const evidenceUrl = articleApplicable ? articleUrl : normalized;
+  const evidenceText = evidencePage$("body").text().replace(/\s+/g, " ").trim();
+  const fullSiteText = [homepage, contactText, aboutText, teamText, certificationText].join(" ");
+  const allJsonLd = [
+    ...jsonLdRecords($),
+    ...(articleApplicable ? jsonLdRecords(article$) : []),
+    ...(pageFor("about") ? jsonLdRecords(about$) : [])
+  ];
   const outboundLinks = evidencePage$("a[href]").toArray()
-    .map((el) => absolute(new URL(articleApplicable ? articleUrl : normalized), evidencePage$(el).attr("href") ?? ""))
+    .map((el) => absolute(new URL(evidenceUrl), evidencePage$(el).attr("href") ?? ""))
     .filter((href) => href && !sameOrigin(base, href));
   const authorityLinks = authoritativeOutboundLinks(outboundLinks);
   const sourceCitations = evidencePage$("article a[href],main a[href],cite,blockquote,sup a[href]").toArray()
     .filter((element) => {
       const href = evidencePage$(element).attr("href");
-      return !href || !sameOrigin(base, absolute(new URL(articleApplicable ? articleUrl : normalized), href));
+      return !href || !sameOrigin(base, absolute(new URL(evidenceUrl), href));
     }).length;
   const localIntent = localTrustApplicable(homepage + " " + contactText);
   const hasContactLink = Boolean(links.contact || contactText);
+  const ymyl = ymylDetected(evidenceText || fullSiteText, evidenceUrl);
+  const disclaimer = disclaimerDetected(evidenceText) || disclaimerDetected(fullSiteText);
+  const thirdPartyReviews = thirdPartyReviewSignals($, fullSiteText);
+  const certifications = certificationSignals($, fullSiteText);
+  const certificationPageCertifications = certificationSignals(certification$, certificationText);
+  const verificationLinks = pageFor("about") ? externalVerificationLinks(about$, base) : [];
+  const reviewedBySchema = allJsonLd.some((record) => hasPropertyDeep(record, "reviewedBy"));
+  const sslOrganization = await sslCertificateOrganization(base);
   const results: EeatCheckResult[] = [];
   const add = (id: number, state: Parameters<typeof result>[1]) => {
     const def = CHECKS.find((check) => check.id === id);
@@ -419,8 +548,65 @@ export async function runEeatAudit(inputUrl: string, html?: string): Promise<Eea
       ? pageEvidence(links.team?.href ?? normalized, true, { reason: "No Team, People, Leadership, or Authors page was detected." })
       : pageEvidence(links.team?.href ?? normalized, !(team$("img").length >= 2 || team$("a[href*='linkedin.com']").length >= 2 || (teamText.match(/\b(CEO|Founder|Director|Manager|Lead|Head of)\b/g) ?? []).length >= 2), { teamUrl: links.team?.href ?? "" })
   });
+  add(26, {
+    passed: verificationLinks.length > 0,
+    warning: Boolean(pageFor("about")),
+    evidence: !pageFor("about")
+      ? pageEvidence(links.about?.href ?? normalized, true, { reason: "No readable About page was available for verification-link analysis." })
+      : pageEvidence(links.about?.href ?? normalized, verificationLinks.length === 0, { verificationLinks }),
+    recommendation: "Link the About page to verifiable company, founder, certification, review, or public profile sources."
+  });
 
   add(14, { passed: /trusted by|clients|customers|partners|featured in/i.test(homepage) && $("img[alt]").length >= 2, warning: true, evidence: pageEvidence(normalized, !(/trusted by|clients|customers|partners|featured in/i.test(homepage) && $("img[alt]").length >= 2), { logoImages: $("img[alt]").length, trustSectionDetected: /clients|customers|partners|featured in|trusted by|case stud/i.test(homepage) }) });
+  add(23, {
+    passed: thirdPartyReviews.length > 0,
+    warning: true,
+    evidence: pageEvidence(normalized, thirdPartyReviews.length === 0, {
+      providersDetected: thirdPartyReviews,
+      reason: thirdPartyReviews.length === 0 ? "No embedded or linked third-party review platform was detected on the crawled page." : undefined
+    }),
+    recommendation: "Add a visible third-party review source such as Google reviews, Trustpilot, G2, Capterra, Clutch, or another relevant platform."
+  });
+  add(24, {
+    passed: Boolean(pageFor("certification")) && (wordCount(certificationText) >= 80 || certificationPageCertifications.length > 0),
+    warning: true,
+    evidence: !links.certification
+      ? pageEvidence(normalized, true, { reason: "No Awards, Certifications, Accreditation, Recognition, Security, or Compliance page link was detected." })
+      : !pageFor("certification")
+        ? pageEvidence(links.certification.href, true, { reason: "The detected awards/certifications page could not be retrieved." })
+        : pageEvidence(links.certification.href, !(wordCount(certificationText) >= 80 || certificationPageCertifications.length > 0), {
+          words: wordCount(certificationText),
+          certifications: certificationPageCertifications
+        }),
+    recommendation: "Create a public awards/certifications page only for credentials that can be substantiated."
+  });
+  add(25, {
+    passed: certifications.length > 0,
+    warning: true,
+    evidence: pageEvidence(normalized, certifications.length === 0, {
+      certifications,
+      reason: certifications.length === 0 ? "No visible industry certification badge, credential, accreditation, or partner badge was detected." : undefined
+    }),
+    recommendation: "Show genuine certification or accreditation badges with links to verification where possible."
+  });
+  add(27, {
+    passed: reviewedBySchema,
+    skipped: !articleApplicable && !ymyl,
+    notApplicable: !articleApplicable && !ymyl,
+    warning: articleApplicable || ymyl,
+    evidence: !articleApplicable && !ymyl
+      ? skippedEvidence("reviewedBy schema applies to article, expert, or YMYL pages.")
+      : pageEvidence(evidenceUrl, !reviewedBySchema, { jsonLdBlocks: allJsonLd.length, reviewedBySchema }),
+    recommendation: "Add accurate reviewedBy schema only when a real reviewer has reviewed the content."
+  });
+  add(28, {
+    skipped: true,
+    notApplicable: !localIntent,
+    evidence: skippedEvidence(
+      "GBP review response rate requires connected, verified Google Business Profile data. Public crawls cannot access owner-response metrics for arbitrary audited sites.",
+      { localIntentDetected: localIntent, googleReviewSignals: thirdPartyReviews.filter((provider) => /google/i.test(provider)) }
+    )
+  });
   add(16, {
     passed: articleApplicable && authorityLinks.length > 0,
     skipped: !articleApplicable,
@@ -447,6 +633,29 @@ export async function runEeatAudit(inputUrl: string, html?: string): Promise<Eea
       ? pageEvidence(links.caseStudy?.href ?? normalized, true, { reason: "No case-study, results, customer-story, or success-story page was detected." })
       : pageEvidence(links.caseStudy?.href ?? normalized, !/\b\d+(?:\.\d+)?%|\b\d+x\b|\bROI\b|\brevenue\b|\bsaved\b/i.test(caseText)),
     recommendation: "Add metrics only to genuine case studies when outcomes can be substantiated."
+  });
+  add(22, {
+    passed: ymyl && disclaimer,
+    skipped: !ymyl,
+    notApplicable: !ymyl,
+    evidence: !ymyl
+      ? skippedEvidence("YMYL disclaimer checks apply only when health, legal, finance, insurance, tax, or similar YMYL intent is detected.")
+      : pageEvidence(evidenceUrl, !disclaimer, { ymylDetected: ymyl, disclaimerDetected: disclaimer }),
+    recommendation: "Add a clear YMYL disclaimer near relevant content and route users to qualified professionals when appropriate."
+  });
+  add(29, {
+    passed: sslOrganization.checked && Boolean(sslOrganization.organization),
+    skipped: !sslOrganization.checked,
+    warning: sslOrganization.checked,
+    evidence: !sslOrganization.checked
+      ? skippedEvidence("TLS certificate details could not be inspected in this runtime.", sslOrganization)
+      : pageEvidence(normalized, !sslOrganization.organization, {
+        organization: sslOrganization.organization,
+        issuer: sslOrganization.issuer,
+        validTo: sslOrganization.validTo,
+        note: "OV/EV is inferred from an organization field on the public TLS certificate. Some clients no longer expose a distinct EV indicator."
+      }),
+    recommendation: "Use an organization-validated certificate only when the business case requires visible organization identity; otherwise keep a valid HTTPS certificate in place."
   });
 
   const categories = summarize(results);

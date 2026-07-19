@@ -78,6 +78,8 @@ export interface GeoAeoAuditResult {
   checks: GeoAeoCheckResult[];
 }
 
+export interface GeoAeoAuditOptions {}
+
 const CHECKS: GeoAeoCheckDefinition[] = [
   { id: 1, category: "AI Bot Access", name: "GPTBot allowed", severity: "BLOCKER", scope: "domain" },
   { id: 4, category: "AI Bot Access", name: "Google-Extended allowed", severity: "BLOCKER", scope: "domain" },
@@ -136,10 +138,7 @@ const CHECKS: GeoAeoCheckDefinition[] = [
   { id: 76, category: "Media & Visuals", name: "OCR legibility", severity: "MINOR", scope: "page" },
   { id: 77, category: "Schema & Technical", name: "VideoObject schema", severity: "MINOR", scope: "page" },
   { id: 78, category: "Media & Visuals", name: "Transcript-HTML alignment", severity: "MAJOR", scope: "page" },
-  { id: 104, category: "Indexability", name: "Bing Index Presence", severity: "MAJOR", scope: "domain" },
-  { id: 105, category: "Indexability", name: "Bing WMT Sitemap Submission", severity: "MAJOR", scope: "domain" },
   { id: 106, category: "Indexability", name: "IndexNow Protocol Implementation", severity: "MINOR", scope: "domain" },
-  { id: 107, category: "Indexability", name: "Bing Places Listing", severity: "MINOR", scope: "domain" },
   { id: 108, category: "Content Structure", name: "H2 Intent Flow", severity: "MINOR", scope: "page" },
   { id: 109, category: "Content Structure", name: "Comparison/vs Page Detection", severity: "ADVISORY", scope: "domain" },
   { id: 110, category: "E-commerce Signals", name: "Product Schema Completeness", severity: "MAJOR", scope: "page" },
@@ -147,7 +146,11 @@ const CHECKS: GeoAeoCheckDefinition[] = [
   { id: 112, category: "E-commerce Signals", name: "Review Volume & Freshness", severity: "MINOR", scope: "page" },
   { id: 113, category: "E-commerce Signals", name: "Review Diversity Check", severity: "MINOR", scope: "page" },
   { id: 114, category: "E-commerce Signals", name: "Merchant Trust Pages", severity: "MAJOR", scope: "domain" },
-  { id: 115, category: "E-commerce Signals", name: "Product Comparison Pages", severity: "ADVISORY", scope: "domain" }
+  { id: 115, category: "E-commerce Signals", name: "Product Comparison Pages", severity: "ADVISORY", scope: "domain" },
+  { id: 116, category: "Local & E-Commerce", name: "Merchant Center Parity", severity: "MAJOR", scope: "page" },
+  { id: 117, category: "Content Structure", name: "No Accordion/Tab Key Facts", severity: "MAJOR", scope: "page" },
+  { id: 118, category: "Local & E-Commerce", name: "GPS Matches GBP Pin", severity: "BLOCKER", scope: "domain" },
+  { id: 119, category: "Local & E-Commerce", name: "Description Consistency GBP+Schema", severity: "MAJOR", scope: "domain" }
 ];
 
 const CATEGORY_ORDER = [
@@ -236,7 +239,6 @@ const CITATION_RECOMMENDATIONS: Record<number, string> = {
   99: "Return a real 404/410 for missing pages instead of a soft-404 200 response.",
   100: "Canonicalize parameter URLs to clean equivalents.",
   101: "Verify Google index coverage in Google Search Console.",
-  102: "Verify Bing index coverage in Bing Webmaster Tools.",
   103: "Remove noindexed URLs from XML sitemaps."
 };
 
@@ -778,6 +780,23 @@ function priceStockSyncEvidence(records: Record<string, unknown>[], $: cheerio.C
   };
 }
 
+function merchantCenterParityEvidence(records: Record<string, unknown>[], $: cheerio.CheerioAPI, bodyText: string) {
+  const schema = schemaOfferEvidence(records);
+  const visible = visiblePriceStockEvidence($, bodyText);
+  const schemaPriceVisible = schema.prices.length === 0 || schema.prices.some((price) => bodyText.includes(price));
+  return {
+    skipped: true,
+    reason: "Merchant Center parity requires connected Google Merchant Center or product feed data. Public crawls can only compare visible page text and Product schema.",
+    feedConnected: false,
+    visibleSchemaParity: schema.offers > 0 && schemaPriceVisible,
+    sourcesChecked: {
+      visiblePage: visible,
+      productSchema: schema,
+      merchantCenterFeed: "not connected"
+    }
+  };
+}
+
 function reviewVolumeFreshnessEvidence(records: Record<string, unknown>[], bodyText: string) {
   const reviewRecords = findObjects(records, (record) => Boolean(record.reviewCount || record.review || record.datePublished || record.dateCreated));
   const reviewCounts = findObjects(records, (record) => Boolean(record.reviewCount))
@@ -869,181 +888,6 @@ function normalizeComparableUrl(value: string) {
   } catch {
     return value.replace(/\/+$/, "").toLowerCase();
   }
-}
-
-function bingWmtApiKey() {
-  return process.env.BING_WEBMASTER_API_KEY?.trim() ?? "";
-}
-
-async function bingWmtRequest(method: string, params: Record<string, string> = {}, init?: RequestInit) {
-  const apiKey = bingWmtApiKey();
-  if (!apiKey) {
-    return {
-      skipped: true,
-      reason: "Bing Webmaster Tools API verification requires BING_WEBMASTER_API_KEY.",
-      requiredEnv: ["BING_WEBMASTER_API_KEY"]
-    };
-  }
-
-  const url = new URL(`https://ssl.bing.com/webmaster/api.svc/json/${method}`);
-  url.searchParams.set("apikey", apiKey);
-  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-
-  try {
-    const response = await fetch(url.toString(), {
-      method: init?.method ?? "GET",
-      signal: AbortSignal.timeout(8000),
-      headers: {
-        accept: "application/json",
-        ...(init?.body ? { "content-type": "application/json; charset=utf-8" } : {}),
-        ...(init?.headers ?? {})
-      },
-      body: init?.body
-    });
-    const data = await response.json().catch(() => ({})) as Record<string, unknown>;
-    return { ok: response.ok, status: response.status, data };
-  } catch (error) {
-    return {
-      skipped: true,
-      reason: "Bing Webmaster Tools API request failed in this crawl environment.",
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-
-function bingPayloadData(data: unknown): unknown {
-  if (!data || typeof data !== "object") return data;
-  return (data as Record<string, unknown>).d ?? data;
-}
-
-function bingSiteUrlCandidates(inputUrl: string) {
-  const parsed = new URL(inputUrl);
-  const host = parsed.hostname.replace(/^www\./, "");
-  return [
-    `${parsed.protocol}//${parsed.hostname}/`,
-    `${parsed.protocol}//${host}/`,
-    `https://${parsed.hostname}/`,
-    `https://${host}/`,
-    `http://${parsed.hostname}/`,
-    `http://${host}/`,
-    `domain:${host}`
-  ];
-}
-
-function siteUrlFromRecord(record: unknown) {
-  if (!record || typeof record !== "object") return "";
-  const item = record as Record<string, unknown>;
-  return String(item.Url ?? item.url ?? item.SiteUrl ?? item.siteUrl ?? "");
-}
-
-function siteVerifiedFromRecord(record: unknown) {
-  if (!record || typeof record !== "object") return false;
-  const item = record as Record<string, unknown>;
-  return item.IsVerified === true || item.isVerified === true || String(item.IsVerified ?? item.isVerified).toLowerCase() === "true";
-}
-
-async function bingVerifiedSiteFor(inputUrl: string) {
-  const sitesResponse = await bingWmtRequest("GetUserSites");
-  if ("skipped" in sitesResponse) return sitesResponse;
-  const sites = bingPayloadData(sitesResponse.data);
-  const siteRecords = Array.isArray(sites) ? sites : [];
-  const candidates = bingSiteUrlCandidates(inputUrl).map(normalizeComparableUrl);
-  const verified = siteRecords
-    .filter(siteVerifiedFromRecord)
-    .map((record) => ({ record, siteUrl: siteUrlFromRecord(record) }))
-    .filter((item) => item.siteUrl);
-  const match = verified.find((item) => candidates.includes(normalizeComparableUrl(item.siteUrl)));
-  if (!match) {
-    return {
-      skipped: true,
-      reason: "No matching verified site property was found in Bing Webmaster Tools for this audited URL.",
-      requestedUrl: inputUrl,
-      candidateSiteUrls: bingSiteUrlCandidates(inputUrl),
-      verifiedSiteUrls: verified.map((item) => item.siteUrl).slice(0, 10)
-    };
-  }
-  return { siteUrl: match.siteUrl, userSitesChecked: siteRecords.length };
-}
-
-function bingUrlInfoPass(info: Record<string, unknown>) {
-  return Boolean(
-    info.IsPage === true
-    || Number(info.HttpStatus) >= 200 && Number(info.HttpStatus) < 400
-    || Number(info.DocumentSize) > 0
-    || String(info.LastCrawledDate ?? "").trim()
-    || String(info.DiscoveryDate ?? "").trim()
-  );
-}
-
-async function bingWmtIndexEvidence(inputUrl: string) {
-  const site = await bingVerifiedSiteFor(inputUrl);
-  if (!("siteUrl" in site)) return site;
-  const siteUrl = String(site.siteUrl);
-  const response = await bingWmtRequest("GetUrlInfo", { siteUrl, url: JSON.stringify(inputUrl) });
-  if ("skipped" in response && response.skipped) return response;
-  const payload = bingPayloadData(response.data);
-  const info = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
-  return {
-    pass: response.ok && bingUrlInfoPass(info),
-    status: response.status,
-    siteUrl,
-    url: inputUrl,
-    userSitesChecked: site.userSitesChecked,
-    urlInfo: {
-      Url: info.Url ?? "",
-      IsPage: info.IsPage ?? null,
-      HttpStatus: info.HttpStatus ?? null,
-      DocumentSize: info.DocumentSize ?? null,
-      DiscoveryDate: info.DiscoveryDate ?? "",
-      LastCrawledDate: info.LastCrawledDate ?? "",
-      TotalChildUrlCount: info.TotalChildUrlCount ?? null
-    },
-    ...(response.ok ? {} : { error: response.data })
-  };
-}
-
-function feedUrlFromRecord(record: unknown) {
-  if (!record || typeof record !== "object") return "";
-  const item = record as Record<string, unknown>;
-  return String(item.Url ?? item.url ?? item.FeedUrl ?? item.feedUrl ?? "");
-}
-
-async function bingWmtSitemapEvidence(inputUrl: string, sitemapUrls: string[]) {
-  const site = await bingVerifiedSiteFor(inputUrl);
-  if (!("siteUrl" in site)) return { ...site, sitemapUrlsFound: sitemapUrls.length };
-  const siteUrl = String(site.siteUrl);
-  const response = await bingWmtRequest("GetFeeds", { siteUrl });
-  if ("skipped" in response && response.skipped) return { ...response, sitemapUrlsFound: sitemapUrls.length };
-  const payload = bingPayloadData(response.data);
-  const feeds = Array.isArray(payload) ? payload : [];
-  const submitted = feeds.map(feedUrlFromRecord).filter(Boolean);
-  const submittedSet = new Set(submitted.map(normalizeComparableUrl));
-  const discovered = [...new Set(sitemapUrls.filter(Boolean))];
-  const missing = discovered.filter((href) => !submittedSet.has(normalizeComparableUrl(href)));
-  return {
-    pass: response.ok && submitted.length > 0 && (discovered.length === 0 || missing.length < discovered.length),
-    status: response.status,
-    siteUrl,
-    userSitesChecked: site.userSitesChecked,
-    discoveredSitemaps: discovered.slice(0, 20),
-    submittedSitemaps: submitted.slice(0, 20),
-    missingSitemaps: missing.slice(0, 20),
-    feedCount: feeds.length,
-    ...(response.ok ? {} : { error: response.data })
-  };
-}
-
-function bingPlacesEvidence(hostname: string, bodyText: string) {
-  const localSignals = /\b(address|phone|near me|hours|directions|store|clinic|office|branch)\b/i.test(bodyText);
-  return {
-    skipped: true,
-    hostname,
-    localSignals,
-    requiredEnv: ["BING_MAPS_API_KEY"],
-    reason: process.env.BING_MAPS_API_KEY
-      ? "BING_MAPS_API_KEY is configured, but Bing Places brand-search integration is not implemented in this runtime."
-      : "Bing Places listing verification requires BING_MAPS_API_KEY."
-  };
 }
 
 function useCasePageDetection(pages: LocalPageHtml[], urls: string[]) {
@@ -1638,6 +1482,28 @@ function hiddenContentEvidence($: cheerio.CheerioAPI) {
   };
 }
 
+function accordionTabKeyFactsEvidence(hiddenEvidence: ReturnType<typeof hiddenContentEvidence>) {
+  const accordionTabWords = hiddenEvidence.categories.accordion + hiddenEvidence.categories.tab;
+  return {
+    pass: accordionTabWords < 100,
+    accordionTabWords,
+    hiddenWordCount: hiddenEvidence.hiddenWordCount,
+    totalHidden: hiddenEvidence.totalHidden,
+    categories: hiddenEvidence.categories,
+    samples: hiddenEvidence.hiddenSamples.slice(0, 5),
+    note: "Counts hidden accordion/tab words to detect key facts that may be unavailable in initial Gemini extraction."
+  };
+}
+
+function gbpConnectionRequiredEvidence(checkName: string, context: Record<string, unknown>) {
+  return {
+    skipped: true,
+    reason: `${checkName} requires the site owner's connected and verified Google Business Profile data. Public audits cannot access private GBP coordinates or descriptions for third-party domains.`,
+    requiredConnection: "Google Business Profile",
+    ...context
+  };
+}
+
 function dataNosnippetEvidence($: cheerio.CheerioAPI) {
   const affectedElements = $("[data-nosnippet]").toArray()
     .map((el) => ({ tag: el.tagName?.toLowerCase() ?? "element", words: wordCount($(el).text()) }))
@@ -1941,7 +1807,7 @@ function scoreGeoChecks(checks: GeoAeoCheckResult[]) {
   return scoreParameterOutcomes(scorable, 100);
 }
 
-export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<GeoAeoAuditResult> {
+export async function runGeoAeoAudit(inputUrl: string, html?: string, options: GeoAeoAuditOptions = {}): Promise<GeoAeoAuditResult> {
   const normalizedUrl = normalizeUrl(inputUrl);
   const url = new URL(normalizedUrl);
   const origin = `${url.protocol}//${url.host}`;
@@ -2110,6 +1976,7 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   const productFieldScore = productSchemaFieldScore(productObjects);
   const productSchemaCompleteness = productSchemaCompletenessEvidence(productObjects);
   const priceStockSync = priceStockSyncEvidence(productObjects, $, bodyText);
+  const merchantCenterParity = merchantCenterParityEvidence(productObjects, $, bodyText);
   const reviewVolumeFreshness = reviewVolumeFreshnessEvidence(productObjects, bodyText);
   const reviewDiversitySignal = reviewDiversity(productObjects);
   const reviewEntropy = reviewDiversityEntropyEvidence(productObjects);
@@ -2119,12 +1986,6 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
     ...directTrustCandidates
   ]);
   const indexNow = await indexNowEvidence(origin, robotsText, pageHtml);
-  const sitemapFeedUrls = sitemapFeedCandidates(origin, robotsText);
-  const [bingWmtIndex, bingWmtSitemaps] = await Promise.all([
-    bingWmtIndexEvidence(normalizedUrl),
-    bingWmtSitemapEvidence(normalizedUrl, sitemapFeedUrls)
-  ]);
-  const bingPlaces = bingPlacesEvidence(url.hostname, bodyText);
   const geminiWaf = geminiWafEvidence(googleExtendedPage);
   const ipRangeEvidence = {
     skipped: true,
@@ -2170,6 +2031,7 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   const maxSnippet = maxSnippetValue(pageHtml, serverPage?.response);
   const maxImagePreview = maxImagePreviewValue(pageHtml, serverPage?.response);
   const hiddenEvidence = hiddenContentEvidence($);
+  const accordionTabKeyFacts = accordionTabKeyFactsEvidence(hiddenEvidence);
   const dataNosnippet = dataNosnippetEvidence($);
   const [httpHttps, wwwVariant] = await Promise.all([
     httpToHttpsEvidence(url),
@@ -2182,9 +2044,8 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
   const pagination = paginationEvidence($, normalizedUrl, canonicalUrl);
   const soft404 = soft404Evidence(serverPage?.response, bodyText, normalizedUrl, $("title").first().text(), $("h1").first().text());
   const parameterUrl = parameterUrlEvidence(url, canonicalUrl);
-  const [googleIndex, bingIndex, sitemapNoindex] = await Promise.all([
+  const [googleIndex, sitemapNoindex] = await Promise.all([
     searchIndexEvidence(`https://www.google.com/search?q=site:${encodeURIComponent(url.hostname)}`, url.hostname, "Advisory only - verify in GSC"),
-    searchIndexEvidence(`https://www.bing.com/search?q=site:${encodeURIComponent(url.hostname)}`, url.hostname, "Advisory only - verify in Bing WMT"),
     sitemapNoindexEvidence(sitemapAndPageUrls)
   ]);
   const ssrRatio = renderedWords ? oaiWords / renderedWords : null;
@@ -2507,26 +2368,11 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
       recommendation: "Make the affected citable content visible without requiring login, subscription, membership, or registration."
     });
   }
-  if ("pass" in bingWmtIndex) {
-    addCheck(result, 104, Boolean(bingWmtIndex.pass), JSON.stringify(bingWmtIndex), {
-      recommendation: "Verify the site property in Bing Webmaster Tools and confirm the audited URL has Bing discovery or crawl evidence."
-    });
-  } else {
-    addSkippedCheck(result, 104, JSON.stringify(bingWmtIndex));
-  }
-  if ("pass" in bingWmtSitemaps) {
-    addCheck(result, 105, Boolean(bingWmtSitemaps.pass), JSON.stringify(bingWmtSitemaps), {
-      recommendation: "Submit the discovered XML sitemap in Bing Webmaster Tools and wait for Bing to process it."
-    });
-  } else {
-    addSkippedCheck(result, 105, JSON.stringify(bingWmtSitemaps));
-  }
   addCheck(result, 106, indexNow.pass, JSON.stringify(indexNow), {
     warning: !indexNow.pass,
     priorityScore: 10,
     recommendation: "Publish an IndexNow key file and configure your CMS or deployment workflow to submit changed URLs."
   });
-  addSkippedCheck(result, 107, JSON.stringify(bingPlaces));
   addCheck(result, 108, h2Intent.pass, JSON.stringify(h2Intent), {
     warning: !h2Intent.pass,
     priorityScore: 15,
@@ -2640,6 +2486,24 @@ export async function runGeoAeoAudit(inputUrl: string, html?: string): Promise<G
       recommendation: "Correct the proven name, address, or phone mismatch between the verified Google Business Profile and the affected local-business page."
     });
   }
+  addSkippedCheck(result, 116, JSON.stringify(merchantCenterParity));
+  addCheck(result, 117, accordionTabKeyFacts.pass, JSON.stringify(accordionTabKeyFacts), {
+    warning: !accordionTabKeyFacts.pass,
+    priorityScore: 15,
+    recommendation: "Move important facts out of accordions or tab-only panes into visible page sections where Gemini can extract them from the initial content."
+  });
+  addSkippedCheck(result, 118, JSON.stringify(gbpConnectionRequiredEvidence("GPS Matches GBP Pin", {
+    localBusinessSchema: localBusinessObjects.length > 0,
+    latitudeSignalAvailable: jsonLdHasProperty(localBusinessObjects, "latitude") || localMicrodataRdfa.hasLatitude || localMapSignals.hasLatitude,
+    longitudeSignalAvailable: jsonLdHasProperty(localBusinessObjects, "longitude") || localMicrodataRdfa.hasLongitude || localMapSignals.hasLongitude,
+    googleBusinessProfileDetected: googleBusinessProfileUrls.length > 0
+  })));
+  addSkippedCheck(result, 119, JSON.stringify(gbpConnectionRequiredEvidence("Description Consistency GBP+Schema", {
+    localBusinessSchema: localBusinessObjects.length > 0,
+    organizationSchema: localOrganizationObjects.length > 0,
+    localPagesChecked: localGeoPages.length,
+    googleBusinessProfileDetected: googleBusinessProfileUrls.length > 0
+  })));
   addCheck(result, 71, consentEvidence.pass, JSON.stringify(consentEvidence), {
     recommendation: "Keep primary page content available in the initial HTML instead of replacing it with a cookie-consent interstitial."
   });

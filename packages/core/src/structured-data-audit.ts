@@ -70,12 +70,12 @@ const CHECKS: CheckDefinition[] = [
   [54, "LocalBusiness Schema", "LocalBusiness: priceRange", 0, "Advisory"],
   [55, "FAQ & HowTo Schema", "HowTo: totalTime+Cost", 0, "Advisory"],
   [56, "Schema Validation & Quality", "Schema Versioning", 0.51, "Low"],
-  [57, "Specialist Schema Types", "Speakable + Valid Selectors", 0, "Advisory"],
-  [58, "Specialist Schema Types", "DefinedTerm on Glossary", 0, "Advisory"],
-  [59, "Specialist Schema Types", "Dataset on Research", 0, "Advisory"],
-  [60, "Specialist Schema Types", "ProfilePage on Bio Pages", 0, "Advisory"],
-  [61, "Specialist Schema Types", "Event on Webinars", 0, "Advisory"],
-  [62, "Specialist Schema Types", "SoftwareApp on Tools", 0, "Advisory"]
+  [57, "Specialist Schema Types", "Speakable + Valid Selectors", 1.52, "Medium"],
+  [58, "Specialist Schema Types", "DefinedTerm on Glossary", 1.52, "Medium"],
+  [59, "Specialist Schema Types", "Dataset on Research", 1.52, "Medium"],
+  [60, "Specialist Schema Types", "ProfilePage on Bio Pages", 1.52, "Medium"],
+  [61, "Specialist Schema Types", "Event on Webinars", 1.52, "Medium"],
+  [62, "Specialist Schema Types", "SoftwareApp on Tools", 1.52, "Medium"]
 ].map(([id, category, name, weight, severity]) => ({ id, category, name, weight, severity })) as CheckDefinition[];
 
 const ADVISORY_DETAILS: Record<number, Pick<CheckDefinition, "priorityScore" | "recommendation">> = {
@@ -94,6 +94,14 @@ const ADVISORY_DETAILS: Record<number, Pick<CheckDefinition, "priorityScore" | "
   10: {
     priorityScore: 15,
     recommendation: "Add knowsAbout topics only when they accurately describe the business expertise."
+  },
+  58: {
+    priorityScore: 45,
+    recommendation: "Create a glossary or key-terms page and add DefinedTerm JSON-LD for important industry terms, definitions, and canonical term URLs."
+  },
+  60: {
+    priorityScore: 45,
+    recommendation: "Create public bio/profile pages for authors, experts, founders, or team members and mark each one up with ProfilePage JSON-LD connected to a Person entity."
   }
 };
 
@@ -189,6 +197,10 @@ function pathSegments(url: URL) {
   return url.pathname.split("/").filter(Boolean);
 }
 
+function wordCount(text: string) {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
 function visibleFaqSignals($: cheerio.CheerioAPI) {
   const roots = $("main,article").length ? $("main,article") : $("body");
   const containers = roots.find("details,.faq,[id*='faq' i],[class*='faq' i],[aria-label*='faq' i]").filter((_, element) =>
@@ -251,6 +263,17 @@ function normalizedText(value: string) {
   return value.toLowerCase().replace(/&nbsp;/g, " ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function comparableUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    parsed.hash = "";
+    parsed.search = "";
+    return parsed.toString().replace(/\/$/, "").toLowerCase();
+  } catch {
+    return value.replace(/\/$/, "").toLowerCase();
+  }
+}
+
 function visibleDateMatches(body: string, value: unknown) {
   const raw = textValue(value);
   if (!raw) return false;
@@ -299,6 +322,275 @@ function conflictingDuplicateIds(records: Record<string, unknown>[]) {
   });
 }
 
+function schemaRecordByReference(records: Record<string, unknown>[], value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  const reference = textValue(value);
+  if (!reference) return {};
+  return records.find((record) => [record["@id"], record.url, record.sameAs].some((candidate) => {
+    if (Array.isArray(candidate)) return candidate.map(String).includes(reference);
+    return textValue(candidate) === reference;
+  })) ?? {};
+}
+
+function schemaObjectsByTypeDeep(value: unknown, predicate: (type: string) => boolean): Record<string, unknown>[] {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.flatMap((item) => schemaObjectsByTypeDeep(item, predicate));
+  const record = value as Record<string, unknown>;
+  const current = typesOf(record).some(predicate) ? [record] : [];
+  return [...current, ...Object.values(record).flatMap((item) => schemaObjectsByTypeDeep(item, predicate))];
+}
+
+function excludedSpecialistRoute(url: URL) {
+  const normalizedPath = url.pathname.toLowerCase().replace(/\/+$/, "") || "/";
+  const segments = pathSegments(url).map((segment) => segment.toLowerCase());
+  const first = segments[0] ?? "";
+  if (normalizedPath === "/") return true;
+  if (/^(?:about|company|contact|products?|collections?|categories?|services?|solutions?|pricing|login|signup|sign-in|account|dashboard|cart|checkout|search)$/i.test(first)) return true;
+  return /(?:^|\/)(?:privacy-policy|privacy|aml-policy|aml|terms|terms-and-conditions|refund-policy|refund|return-policy|returns|shipping-policy|cookie-policy|disclaimer)(?:\/|$)/i.test(normalizedPath);
+}
+
+function primaryScope($: cheerio.CheerioAPI) {
+  return $("main,article").first().length ? $("main,article").first() : $("body");
+}
+
+function speakablePageSignals($: cheerio.CheerioAPI, url: URL, records: Record<string, unknown>[], articleApplicable: boolean, signals: ReturnType<typeof pageSignals>) {
+  const text = primaryScope($).text().replace(/\s+/g, " ");
+  const pathSignal = /\/(?:news|announcements?|press|articles?|insights?|editorial)(?:\/|$)/i.test(url.pathname);
+  const schemaSignal = findByType(records, (type) => /NewsArticle|Article|BlogPosting/i.test(type)).length > 0;
+  const editorialSignal = /\b(news|announcement|press release|editorial|published|updated|byline|author)\b/i.test(`${signals.pathAndHeadings} ${text}`);
+  const sufficientContent = wordCount(text) >= 180;
+  const detected = !excludedSpecialistRoute(url) && articleApplicable && sufficientContent && (pathSignal || schemaSignal || editorialSignal);
+  return { detected, pathSignal, schemaSignal, editorialSignal, sufficientContent, words: wordCount(text), excludedRoute: excludedSpecialistRoute(url) };
+}
+
+function glossaryPageSignals($: cheerio.CheerioAPI, url: URL, signals: ReturnType<typeof pageSignals>) {
+  const scope = primaryScope($);
+  const text = scope.text().replace(/\s+/g, " ");
+  const pathSignal = /\/(?:glossary|dictionary|terminology|terms)(?:\/|$)/i.test(url.pathname);
+  const titleSignal = /\b(glossary|dictionary|terminology|key terms|definitions?)\b/i.test(signals.pathAndHeadings);
+  const structuredTerms = scope.find("dfn,dt,[class*='term' i],[class*='glossary' i],[id*='glossary' i]").length;
+  const termLinks = scope.find("a[href*='/glossary/'],a[href*='/dictionary/'],a[href*='/terminology/']").length;
+  const definitionPairs = scope.find("dl dt").length >= 3 && scope.find("dl dd").length >= 3;
+  const definitionPage = pathSignal && /\b(what is|definition of|meaning of|defined as)\b/i.test(text);
+  const detected = !excludedSpecialistRoute(url) && (pathSignal || titleSignal) && (structuredTerms >= 3 || termLinks > 0 || definitionPairs || definitionPage);
+  return { detected, pathSignal, titleSignal, structuredTerms, termLinks, definitionPairs, definitionPage, excludedRoute: excludedSpecialistRoute(url) };
+}
+
+function datasetPageSignals($: cheerio.CheerioAPI, url: URL, records: Record<string, unknown>[], signals: ReturnType<typeof pageSignals>) {
+  const scope = primaryScope($);
+  const text = scope.text().replace(/\s+/g, " ");
+  const pathSignal = /\/(?:datasets?|data-catalog|open-data|downloads?\/data)(?:\/|$)/i.test(url.pathname);
+  const titleSignal = /\b(dataset|data catalog|open data|downloadable data|statistical data collection)\b/i.test(signals.pathAndHeadings);
+  const downloadLinks = scope.find("a[href$='.csv'],a[href$='.json'],a[href$='.xlsx'],a[href$='.parquet'],a[href$='.zip']").length;
+  const schemaSignal = findByType(records, (type) => type === "Dataset").length > 0;
+  const dataLanguage = /\b(data dictionary|variables?|columns?|rows?|observations?|csv|json|download dataset|license)\b/i.test(text);
+  const detected = !excludedSpecialistRoute(url) && (schemaSignal || (pathSignal || titleSignal) && (downloadLinks > 0 || dataLanguage));
+  return { detected, schemaSignal, pathSignal, titleSignal, downloadLinks, dataLanguage, excludedRoute: excludedSpecialistRoute(url) };
+}
+
+function eventPageSignals($: cheerio.CheerioAPI, url: URL, records: Record<string, unknown>[], signals: ReturnType<typeof pageSignals>) {
+  const scope = primaryScope($);
+  const text = scope.text().replace(/\s+/g, " ");
+  const pathSignal = /\/(?:events?|webinars?|workshops?|seminars?|conferences?|meetups?|training)(?:\/|$)/i.test(url.pathname);
+  const schemaSignal = findByType(records, (type) => type === "Event").length > 0;
+  const eventIdentity = /\b(webinar|event|conference|workshop|seminar|meetup|training session|live session)\b/i.test(`${signals.pathAndHeadings} ${text}`);
+  const dateTime = Boolean(scope.find("time,[datetime]").length)
+    || /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}\b/i.test(text)
+    || /\b\d{1,2}:\d{2}\s*(?:am|pm)?\b/i.test(text);
+  const attendance = /\b(register|registration|rsvp|tickets?|join online|zoom|venue|location|schedule|agenda|speaker|organizer)\b/i.test(text);
+  const detected = !excludedSpecialistRoute(url) && (schemaSignal || (pathSignal || eventIdentity) && dateTime && attendance);
+  return { detected, schemaSignal, pathSignal, eventIdentity, dateTime, attendance, excludedRoute: excludedSpecialistRoute(url) };
+}
+
+function softwarePageSignals($: cheerio.CheerioAPI, url: URL, records: Record<string, unknown>[], signals: ReturnType<typeof pageSignals>) {
+  const scope = primaryScope($);
+  const text = scope.text().replace(/\s+/g, " ");
+  const pathSignal = /\/(?:tools?|apps?|software|calculators?|generators?|checkers?|analyzers?|platform)(?:\/|$)/i.test(url.pathname);
+  const schemaSignal = findByType(records, (type) => type === "SoftwareApplication" || type === "SoftwareApp").length > 0;
+  const appStoreLink = scope.find("a[href*='play.google.com'],a[href*='apps.apple.com']").length > 0;
+  const productLanguage = /\b(software application|saas|web app|mobile app|calculator|generator|checker|analyzer|online tool|download app|install app)\b/i.test(`${signals.pathAndHeadings} ${text}`)
+    || appStoreLink && /\bapp\b/i.test(`${signals.pathAndHeadings} ${text}`);
+  const publicUseCta = /\b(try (?:it|the tool)|use (?:the )?(?:tool|app)|start (?:the )?(?:tool|app)|calculate|generate|check now|run (?:an )?audit|download (?:the )?app)\b/i.test(text)
+    || appStoreLink;
+  const privateOnly = /\b(login required|sign in to access|dashboard|account only|private beta|contact sales only)\b/i.test(text);
+  const homepageTool = url.pathname === "/" && (schemaSignal || productLanguage && publicUseCta);
+  const excludedRoute = excludedSpecialistRoute(url) && !homepageTool;
+  const detected = !excludedRoute && !privateOnly && (schemaSignal || (pathSignal || productLanguage) && publicUseCta);
+  return { detected, schemaSignal, pathSignal, productLanguage, publicUseCta, appStoreLink, privateOnly, excludedRoute };
+}
+
+function profilePathSignal(url: URL) {
+  const segments = pathSegments(url);
+  const first = segments[0] ?? "";
+  const excluded = /^(?:about|company|login|signup|sign-in|account|cart|checkout|search|products?|collections?|categories?|services?|solutions?|pricing|contact|blog|blogs|articles?|news|privacy|privacy-policy|aml|aml-policy|terms|terms-and-conditions|refund|refund-policy|returns?|shipping|cookie-policy)$/i;
+  if (excluded.test(first)) return false;
+  return /^(?:author|authors|team|people|person|bio|founder|founders|experts?|consultants?|doctor|doctors|lawyer|lawyers|speaker|speakers|profile|profiles|leadership)$/i.test(first)
+    && segments.length >= 2;
+}
+
+function excludedProfileRoute(url: URL) {
+  const normalizedPath = url.pathname.toLowerCase().replace(/\/+$/, "") || "/";
+  const segments = pathSegments(url).map((segment) => segment.toLowerCase());
+  const first = segments[0] ?? "";
+  if (normalizedPath === "/") return true;
+  if (/^(?:about|company|contact|products?|collections?|categories?|services?|solutions?|pricing|blog|blogs|articles?|news|login|signup|sign-in|account|cart|checkout|search)$/i.test(first)) return true;
+  return /(?:^|\/)(?:privacy-policy|privacy|aml-policy|aml|terms|terms-and-conditions|refund-policy|refund|return-policy|returns|shipping-policy|cookie-policy|disclaimer)(?:\/|$)/i.test(normalizedPath);
+}
+
+function likelyPersonName(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length > 80) return false;
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length < 2 || words.length > 5) return false;
+  return words.filter((word) => /^[A-Z][A-Za-z'.-]{1,}$/.test(word)).length >= 2;
+}
+
+function profilePageSignals($: cheerio.CheerioAPI, url: URL, person: Record<string, unknown> | undefined) {
+  const primary = $("main,article").first().length ? $("main,article").first() : $("body");
+  const h1 = $("h1").first().text().replace(/\s+/g, " ").trim();
+  const text = primary.text().replace(/\s+/g, " ").trim();
+  const visible = text.toLowerCase();
+  const pathSignal = profilePathSignal(url);
+  const excludedPath = excludedProfileRoute(url);
+  const personNameMatchesHeading = Boolean(person?.name && normalizedText(h1).includes(normalizedText(textValue(person.name))));
+  const headingName = likelyPersonName(h1) || personNameMatchesHeading;
+  const biography = /\b(bio|biography|about\s+(?:me|the author|doctor|speaker)|profile|background)\b/i.test(text);
+  const jobTitle = /\b(founder|co-?founder|ceo|cto|cfo|director|manager|lead|head of|consultant|advisor|expert|specialist|doctor|physician|lawyer|attorney|speaker|author|editor|principal|partner)\b/i.test(text)
+    || primary.find("[class*='title' i],[class*='role' i],[class*='position' i],[itemprop='jobTitle']").length > 0;
+  const profilePhoto = primary.find("img").toArray().some((image) => {
+    const node = $(image);
+    const marker = `${node.attr("alt") ?? ""} ${node.attr("class") ?? ""} ${node.attr("src") ?? ""}`;
+    return /profile|avatar|headshot|portrait|author|doctor|speaker|founder|team/i.test(marker)
+      || Boolean(h1 && node.attr("alt") && normalizedText(node.attr("alt") ?? "").includes(normalizedText(h1)));
+  });
+  const socialLinks = primary.find("a[href*='linkedin.com'],a[href*='twitter.com'],a[href*='x.com'],a[href*='facebook.com'],a[href*='instagram.com'],a[href*='github.com'],a[href*='orcid.org']").length;
+  const credentials = /\b(\d+\+?\s+years?|certified|licensed|phd|md|mba|degree|credentials?|experience|specializes?|expertise|awards?|publications?)\b/i.test(text);
+  const contact = primary.find("a[href^='mailto:'],a[href^='tel:']").length > 0 || emailFound(text) || phoneFound(text);
+  const affiliation = /\b(works at|works for|employed by|part of|member of|company|organization|practice|firm|clinic|hospital|university|agency|studio|team)\b/i.test(text);
+  const score = [headingName, biography, jobTitle, profilePhoto, socialLinks > 0, credentials, contact, affiliation].filter(Boolean).length;
+  const supportSignals = [biography, jobTitle, profilePhoto, socialLinks > 0, credentials, contact, affiliation].filter(Boolean).length;
+  const strongIndividualProfile = headingName && supportSignals >= 3;
+  const detected = Boolean(strongIndividualProfile && (pathSignal || !excludedPath && supportSignals >= 4 || personNameMatchesHeading && supportSignals >= 3));
+  return {
+    detected,
+    score,
+    supportSignals,
+    pathSignal,
+    excludedPath,
+    headingName,
+    personNameMatchesHeading,
+    biography,
+    jobTitle,
+    profilePhoto,
+    socialLinks,
+    credentials,
+    contact,
+    affiliation,
+    h1
+  };
+}
+
+function emailFound(text: string) {
+  return /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text);
+}
+
+function phoneFound(text: string) {
+  return /\+?\d[\d\s().-]{7,}\d/.test(text);
+}
+
+function profilePageValidation(records: Record<string, unknown>[], $: cheerio.CheerioAPI, url: URL, signals: ReturnType<typeof profilePageSignals>) {
+  const profilePage = findByType(records, (type) => type === "ProfilePage")[0];
+  const mainEntity = schemaRecordByReference(records, profilePage?.mainEntity);
+  const mainEntityTypes = typesOf(mainEntity);
+  const missingRequired: string[] = [];
+  const recommendedMissing: string[] = [];
+  const mismatches: string[] = [];
+  const body = $("body").text().replace(/\s+/g, " ");
+  const bodyNorm = normalizedText(body);
+
+  if (!profilePage) missingRequired.push("ProfilePage");
+  if (profilePage && !Object.keys(mainEntity).length) missingRequired.push("mainEntity");
+  if (Object.keys(mainEntity).length && !mainEntityTypes.includes("Person")) missingRequired.push("mainEntity Person");
+  for (const field of ["name", "url", "jobTitle", "worksFor"]) {
+    if (!textValue(mainEntity[field])) missingRequired.push(`Person.${field}`);
+  }
+  for (const field of ["image", "sameAs", "description"]) {
+    if (!textValue(mainEntity[field])) recommendedMissing.push(`Person.${field}`);
+  }
+
+  const schemaName = textValue(mainEntity.name);
+  if (schemaName && !bodyNorm.includes(normalizedText(schemaName))) mismatches.push("Person.name is not visible on the page");
+  const schemaJobTitle = textValue(mainEntity.jobTitle);
+  if (schemaJobTitle && !bodyNorm.includes(normalizedText(schemaJobTitle))) mismatches.push("Person.jobTitle is not visible on the page");
+  const schemaUrl = textValue(mainEntity.url);
+  if (schemaUrl && comparableUrl(schemaUrl) !== comparableUrl(url.toString())) mismatches.push("Person.url does not match the profile page URL");
+
+  return {
+    passed: missingRequired.length === 0 && mismatches.length === 0,
+    profilePageFound: Boolean(profilePage),
+    mainEntityTypes,
+    missingRequired,
+    recommendedMissing,
+    mismatches,
+    visibleSignals: signals
+  };
+}
+
+function speakableValidation(records: Record<string, unknown>[]) {
+  const speakableObjects = schemaObjectsByTypeDeep(records, (type) => type === "SpeakableSpecification");
+  const selectorObjects = speakableObjects.filter((record) => textValue(record.cssSelector) || textValue(record.xpath));
+  return {
+    passed: selectorObjects.length > 0,
+    schemaFound: speakableObjects.length > 0,
+    selectorsFound: selectorObjects.length,
+    missingRequired: speakableObjects.length ? selectorObjects.length ? [] : ["cssSelector or xpath"] : ["SpeakableSpecification"]
+  };
+}
+
+function definedTermValidation(records: Record<string, unknown>[]) {
+  const terms = schemaObjectsByTypeDeep(records, (type) => type === "DefinedTerm");
+  const validTerms = terms.filter((term) => textValue(term.name) && (textValue(term.description) || textValue(term.termCode) || textValue(term.url)));
+  return {
+    passed: validTerms.length > 0,
+    schemaFound: terms.length > 0,
+    validTerms: validTerms.length,
+    missingRequired: terms.length ? ["DefinedTerm.name plus description, termCode, or url"] : ["DefinedTerm"]
+  };
+}
+
+function datasetValidation(records: Record<string, unknown>[]) {
+  const datasets = schemaObjectsByTypeDeep(records, (type) => type === "Dataset");
+  const validDatasets = datasets.filter((dataset) => textValue(dataset.name) && (textValue(dataset.description) || textValue(dataset.distribution) || textValue(dataset.url)));
+  return {
+    passed: validDatasets.length > 0,
+    schemaFound: datasets.length > 0,
+    validDatasets: validDatasets.length,
+    missingRequired: datasets.length ? ["Dataset.name plus description, distribution, or url"] : ["Dataset"]
+  };
+}
+
+function eventValidation(records: Record<string, unknown>[]) {
+  const events = schemaObjectsByTypeDeep(records, (type) => type === "Event");
+  const validEvents = events.filter((event) => textValue(event.name) && textValue(event.startDate) && (textValue(event.location) || textValue(event.eventAttendanceMode) || textValue(event.url)));
+  return {
+    passed: validEvents.length > 0,
+    schemaFound: events.length > 0,
+    validEvents: validEvents.length,
+    missingRequired: events.length ? ["Event.name, startDate, and location/eventAttendanceMode/url"] : ["Event"]
+  };
+}
+
+function softwareValidation(records: Record<string, unknown>[]) {
+  const apps = schemaObjectsByTypeDeep(records, (type) => type === "SoftwareApplication" || type === "SoftwareApp");
+  const validApps = apps.filter((app) => textValue(app.name) && (textValue(app.url) || textValue(app.applicationCategory) || textValue(app.operatingSystem)));
+  return {
+    passed: validApps.length > 0,
+    schemaFound: apps.length > 0,
+    validApps: validApps.length,
+    missingRequired: apps.length ? ["SoftwareApplication.name plus url, applicationCategory, or operatingSystem"] : ["SoftwareApplication"]
+  };
+}
+
 function result(def: CheckDefinition, state: {
   passed?: boolean;
   skipped?: boolean;
@@ -309,11 +601,12 @@ function result(def: CheckDefinition, state: {
   severity?: StructuredDataSeverity;
   weight?: number;
   priorityScore?: number;
+  allowSkip?: boolean;
 }): StructuredDataCheckResult {
-  const skipped = false;
-  const passed = Boolean(state.passed);
+  const skipped = Boolean(state.allowSkip && state.skipped);
+  const passed = skipped ? true : Boolean(state.passed);
   const warning = false;
-  const affected = passed ? 0 : 1;
+  const affected = skipped || passed ? 0 : 1;
   return {
     ...def,
     ...(state.severity ? { severity: state.severity } : {}),
@@ -321,13 +614,14 @@ function result(def: CheckDefinition, state: {
     ...(state.priorityScore !== undefined ? { priorityScore: state.priorityScore } : {}),
     passed,
     skipped,
+    ...(state.notApplicable ? { notApplicable: true } : {}),
     warning,
     score: skipped ? 0 : passed ? 1 : 0,
     ...(state.whatIsWrong ? { whatIsWrong: state.whatIsWrong } : {}),
     evidence: {
       ...(state.evidence ?? {}),
       pagesCrawled: 1,
-      pagesChecked: 1,
+      pagesChecked: skipped ? 0 : 1,
       pagesFailed: affected,
       affectedRate: affected * 100
     }
@@ -416,25 +710,24 @@ const localApplicable = Boolean(local) || (localSignalCount >= 2 && !digitalOnly
   const videoApplicable = Boolean($("video,iframe[src*='youtube'],iframe[src*='vimeo']").length);
   const contentImages = primaryContentImages($);
   const imageApplicable = contentImages.length > 0 && Boolean(articleApplicable || $("main,article").length);
-  const speakableApplicable = Boolean(article && /NewsArticle/i.test(typesOf(article).join(" "))) || /\bspeakable\b/i.test(body);
-  const glossaryTermPath = /^(?:glossary|dictionary|terms?)$/i.test(segments[0] ?? "") && segments.length >= 2;
-  const definedTermApplicable = glossaryTermPath
-    || /\b(term definition|definition of)\b/i.test(signals.pathAndHeadings)
-    || $("main dfn,article dfn,[class*='glossary' i] dfn,[id*='glossary' i] dfn").length >= 1;
-  const datasetApplicable = /\b(dataset|data catalog|download data|research data|study data)\b/i.test(body) || $("a[href$='.csv'],a[href$='.json'],a[href$='.xlsx']").length > 0;
-  const profilePath = /^(?:author|authors|team|people|experts?|doctors?|profile|bio|leadership)$/i.test(segments[0] ?? "") && segments.length >= 2;
-  const profilePageApplicable = Boolean(profilePath
-    && (person || $(".author-bio,[class*='profile' i],[class*='bio' i]").length > 0)
-    && !article);
-  const eventApplicable = Boolean(findByType(records, (type) => type === "Event").length) || hasDatedEventSignals($, signals.visible);
-  const primaryRoot = $("main,article").length ? $("main,article").first() : $("body");
-  const primaryAppStoreLinks = primaryRoot.find("a[href*='play.google.com'],a[href*='apps.apple.com']").length;
-  const softwarePath = /^(?:tools?|apps?|software|calculators?|audits?)$/i.test(segments[0] ?? "");
-  const softwareHeading = /\b(software|saas|calculator|audit tool|web app|mobile app|loan app|application)\b/i.test(signals.pathAndHeadings);
-  const softwareCta = primaryAppStoreLinks > 0
-    || /\b(try (?:it|the tool)|use (?:the )?(?:tool|app)|start (?:the )?(?:tool|app)|calculate|run (?:an )?audit|download (?:the )?app|sign up)\b/i.test(primaryRoot.text());
-  const softwareSchemaFound = findByType(records, (type) => type === "SoftwareApplication" || type === "SoftwareApp").length > 0;
-  const softwareApplicable = Boolean(softwareSchemaFound || !glossaryTermPath && (softwarePath || softwareHeading && softwareCta));
+  const speakableSignals = speakablePageSignals($, url, records, articleApplicable, signals);
+  const speakableApplicable = speakableSignals.detected;
+  const speakableSchema = speakableValidation(records);
+  const glossarySignals = glossaryPageSignals($, url, signals);
+  const definedTermApplicable = glossarySignals.detected;
+  const definedTermSchema = definedTermValidation(records);
+  const datasetSignals = datasetPageSignals($, url, records, signals);
+  const datasetApplicable = datasetSignals.detected;
+  const datasetSchema = datasetValidation(records);
+  const profileSignals = profilePageSignals($, url, person);
+  const profilePageApplicable = profileSignals.detected && !articleApplicable;
+  const profileValidation = profilePageValidation(records, $, url, profileSignals);
+  const eventSignals = eventPageSignals($, url, records, signals);
+  const eventApplicable = eventSignals.detected;
+  const eventSchema = eventValidation(records);
+  const softwareSignals = softwarePageSignals($, url, records, signals);
+  const softwareApplicable = softwareSignals.detected;
+  const softwareSchema = softwareValidation(records);
   const ids = records.map((record) => textValue(record["@id"])).filter(Boolean);
   const conflictingIds = conflictingDuplicateIds(records);
   const allUrls = records.flatMap(absoluteHttpsUrls);
@@ -542,7 +835,8 @@ const localApplicable = Boolean(local) || (localSignalCount >= 2 && !digitalOnly
     || localApplicable
     || eventApplicable
     || softwareApplicable
-    || definedTermApplicable;
+    || definedTermApplicable
+    || profilePageApplicable;
   add(52, { passed: !schemaExpected || $("script[type='application/ld+json']").length > 0, evidence: { jsonLdBlocks: $("script[type='application/ld+json']").length, schemaExpected } });
   add(56, { passed: records.length === 0 || records.some((record) => Boolean(record["@context"])), warning: records.length > 0 && !records.some((record) => Boolean(record["@context"])), evidence: { contexts: records.map((record) => record["@context"]).filter(Boolean) } });
 
@@ -551,12 +845,109 @@ const localApplicable = Boolean(local) || (localSignalCount >= 2 && !digitalOnly
   add(48, { passed: visibleDateMatches(body, article?.datePublished), skipped: !articleApplicable || !article?.datePublished, evidence: { datePublished: article?.datePublished ?? "" } });
   add(49, { passed: faqItems.length > 0 && faqItems.every((item) => normalizedText(body).includes(normalizedText(textValue(item)).slice(0, 40))), skipped: !faq, evidence: { itemCount: faqItems.length, visibleFaqQuestions: visibleFaq.questions } });
 
-  add(57, { passed: findByType(records, (type) => type === "SpeakableSpecification").length > 0, skipped: !speakableApplicable, warning: speakableApplicable, evidence: { speakableApplicable } });
-  add(58, { passed: findByType(records, (type) => type === "DefinedTerm").length > 0, skipped: !definedTermApplicable, warning: definedTermApplicable, evidence: { definedTermApplicable } });
-  add(59, { passed: findByType(records, (type) => type === "Dataset").length > 0, skipped: !datasetApplicable, warning: datasetApplicable, evidence: { datasetApplicable } });
-  add(60, { passed: findByType(records, (type) => type === "ProfilePage").length > 0, skipped: !profilePageApplicable, warning: profilePageApplicable, evidence: { profilePageApplicable } });
-  add(61, { passed: findByType(records, (type) => type === "Event").length > 0, skipped: !eventApplicable, warning: eventApplicable, evidence: { eventApplicable } });
-  add(62, { passed: findByType(records, (type) => type === "SoftwareApplication" || type === "SoftwareApp").length > 0, skipped: !softwareApplicable, warning: softwareApplicable, evidence: { softwareApplicable } });
+  add(57, {
+    passed: speakableApplicable && speakableSchema.passed,
+    skipped: !speakableApplicable,
+    notApplicable: !speakableApplicable,
+    allowSkip: true,
+    evidence: !speakableApplicable
+      ? {
+        speakableApplicable,
+        skippedReason: "No suitable news, editorial, article, or announcement content requiring Speakable markup was detected during the crawl.",
+        visibleSignals: speakableSignals
+      }
+      : { speakableApplicable, ...speakableSchema, visibleSignals: speakableSignals },
+    whatIsWrong: speakableApplicable && !speakableSchema.passed
+      ? `Applicable editorial content is missing valid SpeakableSpecification markup. Missing required fields: ${speakableSchema.missingRequired.join(", ")}.`
+      : undefined
+  });
+  add(58, {
+    passed: definedTermApplicable && definedTermSchema.passed,
+    skipped: !definedTermApplicable,
+    notApplicable: !definedTermApplicable,
+    allowSkip: true,
+    evidence: !definedTermApplicable
+      ? {
+        definedTermApplicable,
+        skippedReason: "No glossary, dictionary, terminology hub, definition page, or structured collection of terms was detected during the crawl.",
+        visibleSignals: glossarySignals
+      }
+      : { definedTermApplicable, ...definedTermSchema, visibleSignals: glossarySignals },
+    whatIsWrong: definedTermApplicable && !definedTermSchema.passed
+      ? `Applicable glossary or terminology content is missing valid DefinedTerm schema. Missing required fields: ${definedTermSchema.missingRequired.join(", ")}.`
+      : undefined
+  });
+  add(59, {
+    passed: datasetApplicable && datasetSchema.passed,
+    skipped: !datasetApplicable,
+    notApplicable: !datasetApplicable,
+    allowSkip: true,
+    evidence: !datasetApplicable
+      ? {
+        datasetApplicable,
+        skippedReason: "No dedicated dataset, structured data download, statistical data collection, or dataset landing page was detected during the crawl.",
+        visibleSignals: datasetSignals
+      }
+      : { datasetApplicable, ...datasetSchema, visibleSignals: datasetSignals },
+    whatIsWrong: datasetApplicable && !datasetSchema.passed
+      ? `Applicable dataset content is missing valid Dataset schema. Missing required fields: ${datasetSchema.missingRequired.join(", ")}.`
+      : undefined
+  });
+  add(60, {
+    passed: profilePageApplicable && profileValidation.passed,
+    skipped: !profilePageApplicable,
+    notApplicable: !profilePageApplicable,
+    allowSkip: true,
+    evidence: !profilePageApplicable
+      ? {
+        profilePageApplicable,
+        skippedReason: "No public author, expert, founder, or team profile pages were detected during the crawl. This check is not applicable.",
+        visibleSignals: profileSignals
+      }
+      : {
+        profilePageApplicable,
+        ...profileValidation
+      },
+    whatIsWrong: profilePageApplicable && !profileValidation.passed
+      ? [
+        profileValidation.profilePageFound ? "" : "Detected profile page is missing ProfilePage schema.",
+        profileValidation.missingRequired.length ? `Missing required fields: ${profileValidation.missingRequired.join(", ")}.` : "",
+        profileValidation.mismatches.length ? `Schema/content mismatch: ${profileValidation.mismatches.join("; ")}.` : ""
+      ].filter(Boolean).join(" ")
+      : undefined
+  });
+  add(61, {
+    passed: eventApplicable && eventSchema.passed,
+    skipped: !eventApplicable,
+    notApplicable: !eventApplicable,
+    allowSkip: true,
+    evidence: !eventApplicable
+      ? {
+        eventApplicable,
+        skippedReason: "No event, webinar, workshop, seminar, conference, meetup, training, or scheduled live-session page was detected during the crawl.",
+        visibleSignals: eventSignals
+      }
+      : { eventApplicable, ...eventSchema, visibleSignals: eventSignals },
+    whatIsWrong: eventApplicable && !eventSchema.passed
+      ? `Applicable event content is missing valid Event schema. Missing required fields: ${eventSchema.missingRequired.join(", ")}.`
+      : undefined
+  });
+  add(62, {
+    passed: softwareApplicable && softwareSchema.passed,
+    skipped: !softwareApplicable,
+    notApplicable: !softwareApplicable,
+    allowSkip: true,
+    evidence: !softwareApplicable
+      ? {
+        softwareApplicable,
+        skippedReason: "No public software application, SaaS product, web app, mobile app, calculator, generator, checker, analyzer, or interactive online tool page was detected during the crawl.",
+        visibleSignals: softwareSignals
+      }
+      : { softwareApplicable, ...softwareSchema, visibleSignals: softwareSignals },
+    whatIsWrong: softwareApplicable && !softwareSchema.passed
+      ? `Applicable software or tool content is missing valid SoftwareApplication schema. Missing required fields: ${softwareSchema.missingRequired.join(", ")}.`
+      : undefined
+  });
 
   const categories = summarize(results);
   const score = scoreChecks(results);
@@ -583,6 +974,7 @@ function aggregatePageAudits(
     const reportedAffected = hardFailures.length ? hardFailures : affected;
     const passed = affected.length === 0;
     const skipped = applicable.length === 0;
+    const notApplicable = skipped && pageChecks.some(({ check }) => check.notApplicable);
     const warning = !skipped && affected.length > 0 && hardFailures.length === 0;
     const firstEvidence = reportedAffected[0]?.check.evidence ?? applicable[0]?.check.evidence ?? pageChecks[0]?.check.evidence ?? {};
     const whatIsWrong = reportedAffected[0]?.check.whatIsWrong;
@@ -599,6 +991,7 @@ function aggregatePageAudits(
       } : {}),
       passed: skipped ? true : passed,
       skipped,
+      ...(notApplicable ? { notApplicable: true } : {}),
       warning,
       score: skipped ? 0 : passed ? 1 : 0,
       ...(whatIsWrong ? { whatIsWrong } : {}),

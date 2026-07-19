@@ -1,10 +1,11 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Bot, FileText, MapPin, Search, Video } from "lucide-react";
 import type { StructuredAiVisibilityReport } from "@aiva/core";
 import { API_BASE, getReport } from "@/lib/api";
+import type { ExternalProperty, IntegrationProvider, PublicIntegrationConnection } from "@/lib/server/integrations/types";
 import {
   CHATGPT_CITATION_CATEGORIES,
   CHATGPT_CITATION_CHECK_IDS,
@@ -26,8 +27,8 @@ type CategoryLike = {
   status: string;
   skippedChecks?: number;
 };
-type AuditTabId = "technical" | "crawlability" | "structuredData" | "onPageSeo" | "imageSeo" | "eeat" | "trustSignals" | "geo" | "citation" | "gemini" | "indexability";
-type ActiveSectionId = "overview" | AuditTabId;
+type AuditTabId = "technical" | "pageSpeed" | "crawlability" | "structuredData" | "onPageSeo" | "imageSeo" | "eeat" | "trustSignals" | "entitySeo" | "geo" | "citation" | "gemini" | "indexability";
+type ActiveSectionId = "overview" | "integrations" | AuditTabId;
 type TabInfo = { label: string; categories: CategoryLike[]; checks: CheckLike[]; score: number; issues: number; available: boolean; checkedAt?: string };
 type IssueImpactCounts = { high: number; medium: number; low: number };
 type IssueTrendPoint = IssueImpactCounts & { label: string };
@@ -92,6 +93,51 @@ const strategyItems = [
   { label: "AI Visibility", icon: Bot },
   { label: "Video Search", icon: Video }
 ];
+
+const integrationProviders: Array<{
+  provider: IntegrationProvider;
+  name: string;
+  shortName: string;
+  description: string;
+  accent: string;
+}> = [
+  {
+    provider: "GOOGLE_SEARCH_CONSOLE",
+    name: "Google Search Console",
+    shortName: "GSC",
+    description: "Connect a verified Search Console property and sync clicks, impressions, CTR, position, queries, pages, countries, and devices.",
+    accent: "#1A73E8"
+  },
+  {
+    provider: "GOOGLE_ANALYTICS",
+    name: "Google Analytics",
+    shortName: "GA4",
+    description: "Connect GA4 to import organic users, sessions, engagement, landing pages, source/medium, devices, geography, and conversions.",
+    accent: "#F9AB00"
+  },
+  {
+    provider: "BING_WEBMASTER",
+    name: "Bing Webmaster Tools",
+    shortName: "Bing",
+    description: "Connect a Microsoft account to map Bing sites and import supported Bing search performance and crawl data.",
+    accent: "#008373"
+  }
+];
+
+const ENTITY_SEO_CATEGORIES = [
+  "Entity Recognition",
+  "Entity Description Consistency",
+  "Entity Attribute Consistency"
+] as const;
+
+const PAGE_SPEED_CATEGORIES = [
+  "Core Web Vitals",
+  "PageSpeed Scores",
+  "Performance",
+  "Performance & Caching",
+  "TTFB & Server Response",
+  "Asset Optimisation"
+] as const;
 
 const statusMeta: Record<Status, { icon: string; className: string }> = {
   Passed: { icon: "OK", className: styles.passed },
@@ -450,6 +496,374 @@ function CoreWebVitalsPanel({ vitals }: { vitals?: StructuredAiVisibilityReport[
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function IntegrationWorkspace({
+  projectId,
+  connections,
+  loading,
+  error,
+  onConnectionsChange
+}: {
+  projectId: string;
+  connections: PublicIntegrationConnection[];
+  loading: boolean;
+  error: string;
+  onConnectionsChange: (connections: PublicIntegrationConnection[]) => void;
+}) {
+  const [propertiesByProvider, setPropertiesByProvider] = useState<Partial<Record<IntegrationProvider, ExternalProperty[]>>>({});
+  const [selectedByProvider, setSelectedByProvider] = useState<Partial<Record<IntegrationProvider, string>>>({});
+  const [workingProvider, setWorkingProvider] = useState<IntegrationProvider | "">("");
+  const [providerErrors, setProviderErrors] = useState<Partial<Record<IntegrationProvider, string>>>({});
+
+  async function refreshConnections() {
+    const response = await fetch(`/api/integrations?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({})) as { connections?: PublicIntegrationConnection[]; message?: string };
+    if (!response.ok) throw new Error(data.message ?? "Could not refresh integrations.");
+    onConnectionsChange(data.connections ?? []);
+  }
+
+  async function loadProperties(provider: IntegrationProvider) {
+    setWorkingProvider(provider);
+    setProviderErrors((current) => ({ ...current, [provider]: undefined }));
+    try {
+      const response = await fetch(`/api/integrations/${provider}/properties?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+      const data = await response.json().catch(() => ({})) as { properties?: ExternalProperty[]; message?: string };
+      if (!response.ok) throw new Error(data.message ?? "Could not load properties.");
+      setPropertiesByProvider((current) => ({ ...current, [provider]: data.properties ?? [] }));
+    } catch (err) {
+      setProviderErrors((current) => ({ ...current, [provider]: err instanceof Error ? err.message : "Could not load properties." }));
+    } finally {
+      setWorkingProvider("");
+    }
+  }
+
+  async function saveProperty(provider: IntegrationProvider) {
+    const propertyId = selectedByProvider[provider];
+    const property = propertiesByProvider[provider]?.find((item) => item.id === propertyId);
+    if (!propertyId) return;
+    setWorkingProvider(provider);
+    setProviderErrors((current) => ({ ...current, [provider]: undefined }));
+    try {
+      const response = await fetch(`/api/integrations/${provider}/select-property?projectId=${encodeURIComponent(projectId)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          propertyId,
+          propertyName: property?.name,
+          accountId: property?.accountId,
+          syncNow: true
+        })
+      });
+      const data = await response.json().catch(() => ({})) as { message?: string };
+      if (!response.ok) throw new Error(data.message ?? "Could not save property.");
+      await refreshConnections();
+    } catch (err) {
+      setProviderErrors((current) => ({ ...current, [provider]: err instanceof Error ? err.message : "Could not save property." }));
+    } finally {
+      setWorkingProvider("");
+    }
+  }
+
+  async function syncProvider(provider: IntegrationProvider) {
+    setWorkingProvider(provider);
+    setProviderErrors((current) => ({ ...current, [provider]: undefined }));
+    try {
+      const response = await fetch(`/api/integrations/${provider}/sync?projectId=${encodeURIComponent(projectId)}`, { method: "POST" });
+      const data = await response.json().catch(() => ({})) as { message?: string };
+      if (!response.ok) throw new Error(data.message ?? "Could not sync provider.");
+      await refreshConnections();
+    } catch (err) {
+      setProviderErrors((current) => ({ ...current, [provider]: err instanceof Error ? err.message : "Could not sync provider." }));
+    } finally {
+      setWorkingProvider("");
+    }
+  }
+
+  return (
+    <section className={styles.integrationWorkspace}>
+      <div className={styles.auditHero}>
+        <div>
+          <p>Data connections</p>
+          <h2>Integrations</h2>
+          <span>Connect each provider account, map the right website property to this GLOMAUDIT project, and sync imported performance data into the dashboard.</span>
+        </div>
+        <div className={styles.auditHeroScore}>
+          <strong>{connections.filter((connection) => connection.status === "CONNECTED").length}/3</strong>
+          <span>connected</span>
+          <span>project mapped</span>
+        </div>
+      </div>
+
+      {error ? <p className={styles.integrationError}>{error}</p> : null}
+
+      <div className={styles.integrationGrid}>
+        {integrationProviders.map((item) => {
+          const connection = connections.find((candidate) => candidate.provider === item.provider);
+          const connected = connection?.status === "CONNECTED";
+          const expired = connection?.status === "EXPIRED";
+          const statusLabel = loading ? "Checking" : connected ? "Connected" : expired ? "Reconnect required" : "Not connected";
+          const returnTo = `/report/${projectId}?integration=1`;
+          const connectUrl = `/api/integrations/${item.provider}/connect?projectId=${encodeURIComponent(projectId)}&returnTo=${encodeURIComponent(returnTo)}`;
+          const properties = propertiesByProvider[item.provider];
+          const providerError = providerErrors[item.provider];
+          const working = workingProvider === item.provider;
+
+          return (
+            <article className={`${styles.card} ${styles.integrationCard}`} key={item.provider}>
+              <div className={styles.integrationCardTop}>
+                <span className={styles.integrationLogo} style={{ background: item.accent }}>{item.shortName}</span>
+                <div>
+                  <h3>{item.name}</h3>
+                  <p>{item.description}</p>
+                </div>
+                <em className={connected ? styles.passed : expired ? styles.needs : styles.skipped}>{statusLabel}</em>
+              </div>
+
+              <div className={styles.integrationDetails}>
+                <div>
+                  <span>Account</span>
+                  <strong>{connection?.accountEmail ?? (connected ? "Connected account" : "No account connected")}</strong>
+                </div>
+                <div>
+                  <span>Selected property</span>
+                  <strong>{connection?.externalPropertyName ?? connection?.externalPropertyId ?? "No property selected"}</strong>
+                </div>
+                <div>
+                  <span>Last sync</span>
+                  <strong>{connection?.lastSyncedAt ? formatAuditDate(connection.lastSyncedAt) : "Not synced yet"}</strong>
+                </div>
+                <div>
+                  <span>Imported range</span>
+                  <strong>{connection?.importedStartDate && connection.importedEndDate ? `${connection.importedStartDate} to ${connection.importedEndDate}` : "No imported data"}</strong>
+                </div>
+              </div>
+
+              {connected ? (
+                <div className={styles.integrationPropertyBox}>
+                  <div className={styles.integrationActions}>
+                    <button className={styles.secondary} type="button" onClick={() => loadProperties(item.provider)} disabled={working}>
+                      {working ? "Loading..." : "Load properties"}
+                    </button>
+                    {connection?.externalPropertyId ? (
+                      <button className={styles.primary} type="button" onClick={() => syncProvider(item.provider)} disabled={working}>
+                        {working ? "Syncing..." : "Sync now"}
+                      </button>
+                    ) : null}
+                  </div>
+                  {properties ? (
+                    properties.length ? (
+                      <div className={styles.integrationPicker}>
+                        <select value={selectedByProvider[item.provider] ?? ""} onChange={(event) => setSelectedByProvider((current) => ({ ...current, [item.provider]: event.target.value }))}>
+                          <option value="">Select property</option>
+                          {properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}
+                        </select>
+                        <button className={styles.primary} type="button" onClick={() => saveProperty(item.provider)} disabled={working || !selectedByProvider[item.provider]}>
+                          {working ? "Saving..." : "Save and sync 90 days"}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className={styles.integrationHelp}>No properties were returned. Make sure this Google account has access to the Search Console or GA4 property, and the provider API is enabled in Google Cloud.</p>
+                    )
+                  ) : null}
+                </div>
+              ) : null}
+
+              {connection?.lastSyncError ? <p className={styles.integrationError}>{connection.lastSyncError}</p> : null}
+              {providerError ? <p className={styles.integrationError}>{providerError}</p> : null}
+
+              <div className={styles.integrationActions}>
+                {connected ? (
+                  <a className={styles.secondary} href={connectUrl}>Reconnect</a>
+                ) : (
+                  <a className={styles.primary} href={connectUrl}>{expired ? "Reconnect account" : "Connect account"}</a>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <article className={`${styles.card} ${styles.integrationNote}`}>
+        <h3>How connection works</h3>
+        <p>Google Search Console and Google Analytics use read-only Google OAuth. Bing uses Microsoft OAuth for the user account. Tokens are stored encrypted on the server, and dashboard reports read imported MongoDB rows instead of calling providers on every page load.</p>
+      </article>
+    </section>
+  );
+}
+
+function pageSpeedMetricStatus(value: number | undefined, good: number, direction: "under" | "over" = "under") {
+  if (value === undefined || !Number.isFinite(value)) return { label: "N/A", className: styles.skipped };
+  const passed = direction === "under" ? value <= good : value >= good;
+  return passed ? { label: "Good", className: styles.passed } : { label: "Needs Improvement", className: styles.minor };
+}
+
+function pageSpeedCheckStatus(check?: CheckLike) {
+  if (!check) return { label: "N/A", className: styles.skipped };
+  if (check.skipped) return { label: "Skipped", className: styles.skipped };
+  if (check.passed) return { label: "Good", className: styles.passed };
+  if (check.warning) return { label: "Warning", className: styles.minor };
+  return { label: "Issue", className: styles.needs };
+}
+
+function findCheck(checks: CheckLike[], ...names: string[]) {
+  const normalizedNames = names.map((name) => name.toLowerCase());
+  return checks.find((check) => normalizedNames.some((name) => String(check.name ?? "").toLowerCase().includes(name)));
+}
+
+function PageSpeedScoreDonut({ score }: { score: number }) {
+  const r = 72;
+  const c = 2 * Math.PI * r;
+  const color = score >= 90 ? "#1F9D55" : score >= 60 ? "#D97706" : "#DC2626";
+  return (
+    <svg className={styles.pageSpeedGauge} viewBox="0 0 180 180" aria-label={`PageSpeed score ${score} percent`}>
+      <circle cx="90" cy="90" r={r} fill="none" stroke="#ECECEC" strokeWidth="14" />
+      <circle cx="90" cy="90" r={r} fill="none" stroke={color} strokeWidth="14" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c - (score / 100) * c} transform="rotate(-90 90 90)" />
+      <text x="90" y="94" textAnchor="middle" className={styles.pageSpeedGaugeText}>{score}</text>
+      <text x="90" y="116" textAnchor="middle" className={styles.pageSpeedGaugeSub}>{statusLabel(score)}</text>
+    </svg>
+  );
+}
+
+function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: StructuredAiVisibilityReport["core_web_vitals"] }) {
+  const checks = tab.checks;
+  const passed = checks.filter((check) => check.passed && !check.skipped && !check.warning).length;
+  const warnings = checks.filter((check) => check.warning && !check.skipped).length;
+  const issues = checks.filter((check) => !check.passed && !check.skipped && !check.warning).length;
+  const skipped = checks.filter((check) => check.skipped).length;
+  const mobileScore = vitals?.mobilePerformanceScore ?? vitals?.performanceScore;
+  const desktopScoreCheck = findCheck(checks, "Desktop PSI");
+  const desktopScoreMatch = evidenceText(desktopScoreCheck?.evidence).match(/(\d{1,3})\s*(?:via|$)/i);
+  const desktopScore = vitals?.desktopPerformanceScore ?? (desktopScoreMatch ? clampScore(Number(desktopScoreMatch[1])) : undefined);
+  const ttfbCheck = findCheck(checks, "TTFB < 500ms", "TTFB <800ms", "TTFB");
+  const compressionCheck = findCheck(checks, "Compression on All Text Assets", "GZIP/Brotli", "compression");
+  const cacheCheck = findCheck(checks, "Cache-Control");
+  const cdnCheck = findCheck(checks, "CDN Edge Caching", "CDN");
+  const imageCheck = findCheck(checks, "Image Compression", "WebP", "AVIF");
+  const unusedCssCheck = findCheck(checks, "Unused CSS");
+  const renderBlockingCheck = findCheck(checks, "render-blocking");
+  const preloadCheck = findCheck(checks, "Preload Critical Resources", "LCP image preloaded");
+  const lazyCheck = findCheck(checks, "Below-Fold Images Lazy-Loaded", "lazy");
+  const issueChecks = checks.filter((check) => !check.passed && !check.skipped).slice(0, 6);
+  const source = vitals?.source ?? (vitals?.ttfb !== undefined ? "Crawl Timing" : "PageSpeed Insights");
+  const score = mobileScore !== undefined ? clampScore(mobileScore) : tab.available ? tab.score : 0;
+
+  const metricRows = [
+    { label: "LCP", detail: "Largest Contentful Paint", value: formatMs(vitals?.mobileLcp), status: pageSpeedMetricStatus(vitals?.mobileLcp, 2500) },
+    { label: "INP", detail: "Interaction to Next Paint", value: formatMs(vitals?.inp), status: pageSpeedMetricStatus(vitals?.inp, 200) },
+    { label: "CLS", detail: "Cumulative Layout Shift", value: formatDecimal(vitals?.cls), status: pageSpeedMetricStatus(vitals?.cls, 0.1) },
+    { label: "FCP", detail: "First Contentful Paint", value: formatMs(vitals?.fcp), status: pageSpeedMetricStatus(vitals?.fcp, 1800) },
+    { label: "TTFB", detail: "Time to First Byte", value: formatMs(vitals?.ttfb), status: pageSpeedMetricStatus(vitals?.ttfb, 500) },
+    { label: "Speed Index", detail: "Visual load progress", value: formatMs(vitals?.speedIndex), status: pageSpeedMetricStatus(vitals?.speedIndex, 3400) }
+  ];
+  const serverRows = [
+    { label: "Server Response", value: formatMs(vitals?.ttfb), status: pageSpeedCheckStatus(ttfbCheck) },
+    { label: "Compression", value: compressionCheck ? (compressionCheck.passed ? "Enabled" : "Review") : "N/A", status: pageSpeedCheckStatus(compressionCheck) },
+    { label: "Browser Cache", value: cacheCheck ? (cacheCheck.passed ? "Enabled" : "Review") : "N/A", status: pageSpeedCheckStatus(cacheCheck) },
+    { label: "CDN Detection", value: cdnCheck ? (cdnCheck.passed ? "Detected" : "Review") : "N/A", status: pageSpeedCheckStatus(cdnCheck) }
+  ];
+  const resourceRows = [
+    { label: "Images", check: imageCheck },
+    { label: "Unused CSS", check: unusedCssCheck },
+    { label: "Render-blocking", check: renderBlockingCheck },
+    { label: "Critical preload", check: preloadCheck },
+    { label: "Lazy loading", check: lazyCheck }
+  ];
+
+  return (
+    <section className={styles.pageSpeedPanel}>
+      <div className={styles.auditHero}>
+        <div>
+          <p>Audit workspace</p>
+          <h2>PageSpeed Overview</h2>
+          <span>Review Core Web Vitals, PageSpeed checks, server timing, asset optimization, and the highest-impact performance fixes.</span>
+        </div>
+        <div className={styles.auditHeroScore}>
+          <strong>{tab.available ? `${score}%` : "N/A"}</strong>
+          <span>{issues} open issues</span>
+          <span>{skipped} skipped checks</span>
+        </div>
+      </div>
+
+      <div className={styles.pageSpeedGrid}>
+        <article className={`${styles.card} ${styles.pageSpeedOverviewCard}`}>
+          <div className={styles.cardTitle}><div><h2>Performance Overview</h2><p>{source} · {formatAuditDate(vitals?.checkedAt ?? tab.checkedAt)}</p></div></div>
+          {vitals?.unavailableReason ? <p className={styles.pageSpeedNotice}>{vitals.unavailableReason}</p> : null}
+          <div className={styles.pageSpeedScoreWrap}>
+            <PageSpeedScoreDonut score={score} />
+            <div className={styles.pageSpeedMiniScores}>
+              <div><span>Mobile Score</span><strong>{formatScore(mobileScore)}</strong></div>
+              <div><span>Desktop Score</span><strong>{formatScore(desktopScore)}</strong></div>
+              <div><span>Passed</span><strong>{passed}</strong></div>
+              <div><span>Warnings</span><strong>{warnings}</strong></div>
+              <div><span>Critical Issues</span><strong>{issues}</strong></div>
+            </div>
+          </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.pageSpeedTableCard}`}>
+          <div className={styles.cardTitle}><h2>Core Web Vitals</h2></div>
+          <div className={styles.pageSpeedRows}>
+            {metricRows.map((row) => (
+              <div key={row.label}>
+                <span><b>{row.label}</b><small>{row.detail}</small></span>
+                <strong>{row.value}</strong>
+                <em className={row.status.className}>{row.status.label}</em>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.pageSpeedTableCard}`}>
+          <div className={styles.cardTitle}><h2>Server Performance</h2></div>
+          <div className={styles.pageSpeedRows}>
+            {serverRows.map((row) => (
+              <div key={row.label}>
+                <span>{row.label}</span>
+                <strong>{row.value}</strong>
+                <em className={row.status.className}>{row.status.label}</em>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.pageSpeedTableCard}`}>
+          <div className={styles.cardTitle}><h2>Resource Optimization</h2></div>
+          <div className={styles.resourceRows}>
+            {resourceRows.map((row) => {
+              const status = pageSpeedCheckStatus(row.check);
+              return (
+                <div key={row.label}>
+                  <span>{row.label}</span>
+                  <strong>{row.check ? (row.check.passed ? "Good" : row.check.skipped ? "N/A" : "Issue") : "N/A"}</strong>
+                  <i className={status.className} />
+                </div>
+              );
+            })}
+          </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.pageSpeedIssueCard}`}>
+          <div className={styles.cardTitle}><h2>Priority Performance Issues</h2><p>{issueChecks.length ? "Fix these first" : "No actionable performance failures"}</p></div>
+          {issueChecks.length ? (
+            <ul>
+              {issueChecks.map((check) => (
+                <li key={`${check.id}-${check.name}`}>
+                  <b>!</b>
+                  <span>{check.name}</span>
+                  <em>{check.severity ?? "Issue"}</em>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className={styles.emptyChecks}>Completed PageSpeed checks did not return actionable failures.</p>
+          )}
+        </article>
+      </div>
+
+      <AuditDetailPanel tab={tab} />
     </section>
   );
 }
@@ -938,7 +1352,10 @@ function fixForIssue(name: string, categoryName: string, evidence = "") {
     return "Add factual details, numbers, examples, comparisons, or entity-rich statements where relevant.";
   }
   if (/definedterm/.test(text)) {
-    return "Add DefinedTerm schema only on glossary term pages.";
+    return "Create a glossary or key-terms page and add DefinedTerm JSON-LD for each important term, definition, and canonical term URL.";
+  }
+  if (/profilepage on bio pages/.test(text)) {
+    return "Create public bio/profile pages for authors, experts, founders, or team members and add ProfilePage JSON-LD connected to the Person entity.";
   }
   if (/json-ld syntax valid/.test(text)) {
     return "Correct the JSON-LD syntax error shown in the validation evidence, then parse the updated block again.";
@@ -1326,10 +1743,11 @@ function AuditRow({ category, tab }: { category: CategoryLike; tab: TabInfo }) {
   const passed = passedItemsFor(checks);
   const opportunities = opportunityItemsFor(checks);
   const rawSkippedItems = skippedItemsFor(category, checks);
-  const skippedItems = structuredDataCategory ? [] : rawSkippedItems;
+  const skippedItems = rawSkippedItems;
   const informationalOnly = checks.length > 0 && checks.every((check) => check.informational);
   const allSkippedChecksAreNotApplicable = checks.some((check) => check.skipped)
     && checks.filter((check) => check.skipped).every((check) => check.notApplicable);
+  const specialistAllNotApplicable = category.categoryName === "Specialist Schema Types" && allSkippedChecksAreNotApplicable;
   const passedCount = Math.max(0, (category.passedChecks ?? passed.length) - opportunities.length);
   const applicableCheckCount = parentSchemaMissing ? failedParentChecks.length : checks.length;
   const skippedCount = skippedItems.length;
@@ -1337,10 +1755,12 @@ function AuditRow({ category, tab }: { category: CategoryLike; tab: TabInfo }) {
   const limitedCoverage = !skipped && skippedCount > 0;
   const statusLabel = informationalOnly
     ? "Informational"
-    : status === "Passed" && limitedCoverage
-      ? "Passed · limited coverage"
-      : status;
-  const displayedScore = informationalOnly ? null : score;
+    : allSkippedChecksAreNotApplicable
+      ? "Not applicable"
+      : status === "Passed" && limitedCoverage
+        ? "Passed · limited coverage"
+        : status;
+  const displayedScore = informationalOnly || allSkippedChecksAreNotApplicable ? null : score;
 
   return (
     <details className={`${styles.card} ${styles.auditRow}`}>
@@ -1469,7 +1889,9 @@ function AuditRow({ category, tab }: { category: CategoryLike; tab: TabInfo }) {
                 {skipped ? (
                   <p className={styles.emptyChecks}>
                     {allSkippedChecksAreNotApplicable
-                      ? "This category is not applicable for the audited page or site type."
+                      ? specialistAllNotApplicable
+                        ? "No applicable specialist schema page types were detected during the crawl."
+                        : "This category is not applicable for the audited page or site type."
                       : "These checks were skipped because they were not applicable or could not be verified in the current crawl environment."}
                   </p>
                 ) : null}
@@ -1614,16 +2036,44 @@ function AuditDetailPanel({ tab }: { tab: TabInfo }) {
 export default function ReportPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [report, setReport] = useState<StructuredAiVisibilityReport | null>(null);
   const [error, setError] = useState("");
   const [active, setActive] = useState<ActiveSectionId>("overview");
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [insightsStatus, setInsightsStatus] = useState<"idle" | "submitting" | "subscribed">("idle");
   const [insightsError, setInsightsError] = useState("");
+  const [integrationConnections, setIntegrationConnections] = useState<PublicIntegrationConnection[]>([]);
+  const [integrationsLoading, setIntegrationsLoading] = useState(false);
+  const [integrationsError, setIntegrationsError] = useState("");
+
+  useEffect(() => {
+    if (searchParams.get("integration")) setActive("integrations");
+  }, [searchParams]);
 
   useEffect(() => {
     getReport(params.id).then(setReport).catch((err) => setError(err instanceof Error ? err.message : "Report not found"));
   }, [params.id]);
+
+  useEffect(() => {
+    if (!report || active !== "integrations") return;
+    const controller = new AbortController();
+    setIntegrationsLoading(true);
+    setIntegrationsError("");
+    fetch(`/api/integrations?projectId=${encodeURIComponent(params.id)}`, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(typeof data.message === "string" ? data.message : "Could not load integrations.");
+        return data as { connections?: PublicIntegrationConnection[] };
+      })
+      .then((data) => setIntegrationConnections(data.connections ?? []))
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setIntegrationsError(err instanceof Error ? err.message : "Could not load integrations.");
+      })
+      .finally(() => setIntegrationsLoading(false));
+    return () => controller.abort();
+  }, [active, params.id, report]);
 
   const derived = useMemo(() => {
     if (!report) return null;
@@ -1644,22 +2094,28 @@ export default function ReportPage() {
     const gemini = categoriesFromChecks(geminiChecks, GEMINI_CITATION_CATEGORIES);
     const crawlability = technical.filter((category) => ["Robots.txt & Sitemap", "Indexability & Crawlability", "Internal Linking", "AI Crawl Readiness"].includes(category.categoryName));
     const crawlabilityChecks = checksForCategories(report.technical_audit?.checks ?? [], crawlability);
+    const pageSpeed = technical.filter((category) => PAGE_SPEED_CATEGORIES.includes(category.categoryName as typeof PAGE_SPEED_CATEGORIES[number]));
+    const pageSpeedChecks = checksForCategories(report.technical_audit?.checks ?? [], pageSpeed);
+    const entitySeo = technical.filter((category) => ENTITY_SEO_CATEGORIES.includes(category.categoryName as typeof ENTITY_SEO_CATEGORIES[number]));
+    const entitySeoChecks = checksForCategories(report.technical_audit?.checks ?? [], entitySeo);
     const structuredDataCategories = report.structured_data_audit?.categories ?? [];
     const structuredDataChecks = report.structured_data_audit?.checks ?? [];
     const tabs: Record<AuditTabId, TabInfo> = {
       technical: tabMeta("Technical Audit", technical, report.technical_audit?.checks ?? [], report.technical_audit?.score, report.technical_audit?.checked_at ?? report.created_at),
+      pageSpeed: tabMeta("PageSpeed Overview", pageSpeed, pageSpeedChecks, scoreFromCategories(pageSpeed), report.technical_audit?.checked_at ?? report.created_at),
       crawlability: tabMeta("Crawlability", crawlability, crawlabilityChecks, scoreFromCategories(crawlability), report.technical_audit?.checked_at ?? report.created_at),
       structuredData: tabMeta("Structured data", structuredDataCategories, structuredDataChecks, report.structured_data_audit?.score, report.structured_data_audit?.checked_at),
       onPageSeo: tabMeta("On-Page SEO", report.on_page_seo_audit?.categories ?? [], report.on_page_seo_audit?.checks ?? [], report.on_page_seo_audit?.score, report.on_page_seo_audit?.checked_at),
       imageSeo: tabMeta("Image SEO", report.image_seo_audit?.categories ?? [], report.image_seo_audit?.checks ?? [], report.image_seo_audit?.score, report.image_seo_audit?.checked_at),
       eeat: tabMeta("EEAT Audit", report.eeat_audit?.categories ?? [], report.eeat_audit?.checks ?? [], report.eeat_audit?.score, report.eeat_audit?.checked_at),
       trustSignals: tabMeta("Trust Signal", report.trust_signals_audit?.categories ?? [], report.trust_signals_audit?.checks ?? [], report.trust_signals_audit?.score, report.trust_signals_audit?.checked_at),
+      entitySeo: tabMeta("Entity SEO", entitySeo, entitySeoChecks, scoreFromCategories(entitySeo), report.technical_audit?.checked_at ?? report.created_at),
       geo: tabMeta("GEO / AEO Audit", geo, geoTabChecks, scoreFromCategories(geo, report.geo_aeo_audit?.score), report.geo_aeo_audit?.checked_at),
       citation: tabMeta("ChatGPT Citation", citation, citationChecks, scoreFromCategories(citation), report.geo_aeo_audit?.checked_at),
       gemini: tabMeta("Gemini Citation", gemini, geminiChecks, scoreFromCategories(gemini), report.geo_aeo_audit?.checked_at),
       indexability: tabMeta("Indexability", report.indexability_audit?.categories ?? [], report.indexability_audit?.checks ?? [], report.indexability_audit?.score, report.indexability_audit?.checked_at)
     };
-    const primaryTabs = [tabs.technical, tabs.structuredData, tabs.onPageSeo, tabs.imageSeo, tabs.eeat, tabs.trustSignals, tabs.geo, tabs.indexability];
+    const primaryTabs = [tabs.technical, tabs.pageSpeed, tabs.structuredData, tabs.onPageSeo, tabs.imageSeo, tabs.eeat, tabs.trustSignals, tabs.entitySeo, tabs.geo, tabs.indexability];
     const availableScores = primaryTabs.filter((tab) => tab.available).map((tab) => tab.score);
     const fallbackVisibilityScore = availableScores.length ? availableScores.reduce((sum, score) => sum + score, 0) / availableScores.length : 0;
     const aiVisibilityScore = clampScore(tabs.technical.available && tabs.geo.available && report.overall_score ? report.overall_score : fallbackVisibilityScore);
@@ -1697,7 +2153,7 @@ export default function ReportPage() {
 
   const { tabs, aiVisibilityScore, issueCounts, issueTrend, openIssues, priority, nextPriority, auditScores, lastAuditedAt } = derived;
   const auditNav = Object.keys(tabs) as AuditTabId[];
-  const activeAuditTab = active === "overview" ? null : tabs[active];
+  const activeAuditTab = active === "overview" || active === "integrations" ? null : tabs[active];
   const priorityIssues = priorityIssueGroups(priority);
   const pdfExportUrl = `${API_BASE}/api/reports/${params.id}/export/pdf`;
   const reviewPriority = () => {
@@ -1738,11 +2194,11 @@ export default function ReportPage() {
     { label: "AI Citation Readiness", value: `${Math.max(tabs.citation.score, tabs.gemini.score)}%`, meta: `${tabs.citation.issues + tabs.gemini.issues} citation issues`, icon: "CT", chip: "#FBF1E3", color: "#B8902B", series: paddedSeries([tabs.citation.score, tabs.gemini.score, tabs.geo.score], tabs.geo.score) }
   ];
   const scoreTiles = [
-    tabs.onPageSeo, tabs.imageSeo, tabs.eeat, tabs.trustSignals, tabs.geo, tabs.citation, tabs.gemini, tabs.indexability, tabs.structuredData, tabs.technical
+    tabs.pageSpeed, tabs.onPageSeo, tabs.imageSeo, tabs.eeat, tabs.trustSignals, tabs.entitySeo, tabs.geo, tabs.citation, tabs.gemini, tabs.indexability, tabs.structuredData, tabs.technical
   ];
   const radarAxes = [
-    { label: "On-Page", value: tabs.onPageSeo.score }, { label: "Image", value: tabs.imageSeo.score }, { label: "E-E-A-T", value: tabs.eeat.score },
-    { label: "Trust", value: tabs.trustSignals.score }, { label: "GEO", value: tabs.geo.score }, { label: "ChatGPT", value: tabs.citation.score },
+    { label: "Speed", value: tabs.pageSpeed.score }, { label: "On-Page", value: tabs.onPageSeo.score }, { label: "Image", value: tabs.imageSeo.score }, { label: "E-E-A-T", value: tabs.eeat.score },
+    { label: "Trust", value: tabs.trustSignals.score }, { label: "Entity", value: tabs.entitySeo.score }, { label: "GEO", value: tabs.geo.score }, { label: "ChatGPT", value: tabs.citation.score },
     { label: "Gemini", value: tabs.gemini.score }, { label: "Index", value: tabs.indexability.score }, { label: "Schema", value: tabs.structuredData.score }, { label: "Tech", value: tabs.technical.score }
   ];
 
@@ -1767,6 +2223,11 @@ export default function ReportPage() {
             <button type="button" className={active === "overview" ? styles.navActive : ""} onClick={() => setActive("overview")}>
               <span>Overview</span>
               <b>{aiVisibilityScore}%</b>
+            </button>
+            <button type="button" className={active === "integrations" ? styles.navActive : ""} onClick={() => setActive("integrations")}>
+              <span>Integration</span>
+              <small>GSC · GA4 · Bing</small>
+              <b>{integrationConnections.filter((connection) => connection.status === "CONNECTED").length}/3</b>
             </button>
             {auditNav.map((tab) => (
               <button key={tab} type="button" className={active === tab ? styles.navActive : ""} onClick={() => setActive(tab)}>
@@ -1897,6 +2358,16 @@ export default function ReportPage() {
           <button className={styles.blackButton} type="button" onClick={() => setIsCallModalOpen(true)}>Get My AI Visibility Strategy</button>
         </section>
               </>
+            ) : active === "integrations" ? (
+              <IntegrationWorkspace
+                projectId={params.id}
+                connections={integrationConnections}
+                loading={integrationsLoading}
+                error={integrationsError}
+                onConnectionsChange={setIntegrationConnections}
+              />
+            ) : active === "pageSpeed" ? (
+              <PageSpeedOverviewPanel tab={tabs.pageSpeed} vitals={report.core_web_vitals} />
             ) : activeAuditTab ? (
               <AuditDetailPanel tab={activeAuditTab} />
             ) : null}

@@ -179,6 +179,32 @@ const GUIDANCE: Record<string, Guidance> = {
     ],
     implementationGuide: "Connect the page’s primary content-image field to the Article or WebPage schema generator and emit matching ImageObject data.",
     expectedOutcome: "Primary meaningful content images are represented accurately in structured data."
+  },
+  "Placeholder Alt Text Detection": {
+    issueSummary: "Some meaningful images use placeholder or generic alternative text.",
+    whyItMatters: "Placeholder alt text is technically present but does not describe the image’s subject or purpose.",
+    businessImpact: "Generic descriptions reduce accessibility quality, image-search context, and user confidence when images fail to load.",
+    aiVisibilityImpact: "AI systems receive weak or misleading evidence about visual content when alt text says only image, photo, or placeholder.",
+    fixes: [
+      "Replace placeholder alt values with concise image-specific descriptions.",
+      "Use adjacent headings, captions, and product or article context to write the alt text.",
+      "Update CMS validation so values like image, photo, placeholder, or alt text here cannot be published for meaningful images."
+    ],
+    implementationGuide: "Add placeholder-pattern validation to the shared image component or CMS media field. Keep alt=\"\" allowed only when the editor explicitly marks the asset decorative.",
+    expectedOutcome: "Meaningful images have specific alternative text instead of generic placeholder values."
+  },
+  "File Size <200KB": {
+    issueSummary: "Some measurable meaningful raster images exceed 200KB.",
+    whyItMatters: "Large image files increase transfer weight and can slow rendering, especially on mobile connections.",
+    businessImpact: "Heavy images can hurt Core Web Vitals, increase bounce risk, and make conversion pages feel slower.",
+    aiVisibilityImpact: "Faster image delivery improves crawl efficiency and makes rendered page content more dependable for search and AI systems.",
+    fixes: [
+      "Compress affected images and remove unnecessary metadata.",
+      "Serve resized variants that match the rendered dimensions.",
+      "Use AVIF or WebP with responsive srcset where quality requirements allow."
+    ],
+    implementationGuide: "Set a media-pipeline budget of 200KB for meaningful raster images by default, with documented exceptions for genuinely high-detail imagery.",
+    expectedOutcome: "Measurable meaningful raster images stay under 200KB or have justified exceptions."
   }
 };
 
@@ -233,14 +259,14 @@ function levelValue(level: "Low" | "Medium" | "High") {
 }
 
 function impactLevel(checkName: string): "Low" | "Medium" | "High" {
-  if (["Meaningful Images Have Alt Text", "Native Lazy Loading (Not JS)", "No Key Data as Image-Only"].includes(checkName)) return "High";
-  if (["WebP/AVIF >=70%", "Responsive srcset+sizes", "SVG <title>+<desc>", "ImageObject Schema"].includes(checkName)) return "Medium";
+  if (["Meaningful Images Have Alt Text", "Placeholder Alt Text Detection", "Native Lazy Loading (Not JS)", "No Key Data as Image-Only"].includes(checkName)) return "High";
+  if (["WebP/AVIF >=70%", "File Size <200KB", "Responsive srcset+sizes", "SVG <title>+<desc>", "ImageObject Schema"].includes(checkName)) return "Medium";
   return "Low";
 }
 
 function effortLevel(checkName: string): "Low" | "Medium" | "High" {
-  if (["Meaningful Images Have Alt Text", "Native Lazy Loading (Not JS)", "SVG <title>+<desc>"].includes(checkName)) return "Low";
-  if (["Responsive srcset+sizes", "WebP/AVIF >=70%", "Descriptive File Names", "ImageObject Schema"].includes(checkName)) return "Medium";
+  if (["Meaningful Images Have Alt Text", "Placeholder Alt Text Detection", "Native Lazy Loading (Not JS)", "SVG <title>+<desc>"].includes(checkName)) return "Low";
+  if (["Responsive srcset+sizes", "WebP/AVIF >=70%", "File Size <200KB", "Descriptive File Names", "ImageObject Schema"].includes(checkName)) return "Medium";
   return "High";
 }
 
@@ -260,7 +286,9 @@ function priorityScore(impact: "Low" | "Medium" | "High", scale: "Low" | "Medium
 function boundedPriorityScore(checkName: string, score: number) {
   const ranges: Record<string, [number, number]> = {
     "Meaningful Images Have Alt Text": [60, 80],
+    "Placeholder Alt Text Detection": [55, 75],
     "WebP/AVIF >=70%": [50, 75],
+    "File Size <200KB": [45, 70],
     "Native Lazy Loading (Not JS)": [45, 70],
     "Responsive srcset+sizes": [50, 70],
     "Descriptive File Names": [10, 40],
@@ -307,6 +335,12 @@ function whatIsWrong(checkName: string, evidence: Record<string, unknown>) {
   if (checkName === "Descriptive File Names") {
     return `${sum(evidence, ["nonDescriptiveCount"])} meaningful first-party image instances use generic filenames.`;
   }
+  if (checkName === "Placeholder Alt Text Detection") {
+    return `${sum(evidence, ["placeholderAltCount"])} meaningful image instances use placeholder or generic alt text.`;
+  }
+  if (checkName === "File Size <200KB") {
+    return `${sum(evidence, ["oversizedImages"])} measurable meaningful raster image instances exceed 200KB.`;
+  }
   if (checkName === "SVG <title>+<desc>") {
     return `${sum(evidence, ["missingTitleOrDescription"])} meaningful inline SVG graphics are missing a title or description.`;
   }
@@ -329,7 +363,9 @@ function confidence(checkName: string, evidence: Record<string, unknown>) {
     : 0;
   const checkBase: Record<string, number> = {
     "Meaningful Images Have Alt Text": 98,
+    "Placeholder Alt Text Detection": 96,
     "WebP/AVIF >=70%": 96,
+    "File Size <200KB": 82,
     "Native Lazy Loading (Not JS)": 78,
     "Responsive srcset+sizes": 94,
     "Descriptive File Names": 95,
@@ -390,7 +426,9 @@ function rootCauses(checkName: string, evidence: Record<string, unknown>, pageMe
     .map(([hint]) => `${hint} emits the affected markup`);
   const defaults: Record<string, string> = {
     "Meaningful Images Have Alt Text": "CMS image library does not require alt values",
+    "Placeholder Alt Text Detection": "CMS or migration workflow allows generic alt placeholder values",
     "WebP/AVIF >=70%": "Modern image generation is disabled in the media pipeline",
+    "File Size <200KB": "Image compression or responsive resizing is not enforced in the media pipeline",
     "LCP Image Preloaded": "Critical-image discovery is not configured from measured LCP data",
     "<picture> with WebP+Fallback": "The image renderer does not emit modern sources with compatible fallbacks",
     "Stable Image URLs": "CDN or build pipeline appends volatile cache-busting parameters",
@@ -411,7 +449,9 @@ function rootCauses(checkName: string, evidence: Record<string, unknown>, pageMe
 function overallAiVisibilityImpact(checkName: string, impact: "Low" | "Medium" | "High") {
   const mappings: Record<string, "Low" | "Moderate" | "High"> = {
     "Meaningful Images Have Alt Text": "Moderate",
+    "Placeholder Alt Text Detection": "Moderate",
     "WebP/AVIF >=70%": "Low",
+    "File Size <200KB": "Low",
     "LCP Image Preloaded": "Low",
     "<picture> with WebP+Fallback": "Low",
     "Stable Image URLs": "Low",
@@ -433,7 +473,7 @@ function overallAiVisibilityImpact(checkName: string, impact: "Low" | "Medium" |
 
 function estimatedFixScope(checkName: string, pagesAffected: number) {
   const approximately = `${pagesAffected} affected page${pagesAffected === 1 ? "" : "s"}`;
-  if (checkName === "WebP/AVIF >=70%" || checkName === "Stable Image URLs") {
+  if (checkName === "WebP/AVIF >=70%" || checkName === "File Size <200KB" || checkName === "Stable Image URLs") {
     return {
       level: "Infrastructure-level fix" as const,
       description: `Updating the image optimization or delivery pipeline is expected to improve approximately ${approximately}.`

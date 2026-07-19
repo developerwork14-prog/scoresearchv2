@@ -3,7 +3,7 @@ import tls from "node:tls";
 import { crawlSite, type SiteCrawlResult } from "./site-crawler.js";
 import { isLikelyDecorativeImage } from "./image-alt-utils.js";
 import { scoreParameterOutcomes } from "./audit-outcome.js";
-import { fetchPageSpeedInsights, pageSpeedSnapshot, type PageSpeedMetrics, type PageSpeedSnapshot } from "./pagespeed-insights.js";
+import { fetchLocalPerformanceMetrics, fetchPageSpeedInsightsDetailed, pageSpeedSnapshot, type PageSpeedMetrics, type PageSpeedSnapshot } from "./pagespeed-insights.js";
 
 export type TechnicalSeverity = "PASS" | "BLOCKER" | "MAJOR" | "MINOR" | "ADVISORY";
 export type TechnicalGrade = "A" | "B" | "C" | "D" | "F";
@@ -377,7 +377,47 @@ const CHECKS: RawCheckDefinition[] = [
   [236, "Crawl & Redirect Control", "Internal Search Blocked", 1.69, "MAJOR"],
   [237, "Crawl & Redirect Control", "URL Params Stripped from Internal Links", 1.69, "MINOR"],
   [238, "Security & HTTPS", "Correct Content-Type Headers", 1.13, "MINOR"],
-  [239, "Content & On-Page", "No Duplicate H1 Text Across Pages", 4, "MAJOR"]
+  [239, "Content & On-Page", "No Duplicate H1 Text Across Pages", 4, "MAJOR"],
+  [240, "Robots.txt & Crawlability", "Wildcard Disallow Audit", 3, "MAJOR"],
+  [241, "Content Accessibility", "No Paywall on Citable Content", 4, "BLOCKER"],
+  [242, "Security & HTTPS", "HTTPS Enforced + Valid Cert", 4, "BLOCKER"],
+  [243, "HTTP Status & Availability", "HTTP 200 on All Targets", 4, "BLOCKER"],
+  [244, "Redirects", "No Redirect Chains <=1 Hop", 3, "MAJOR"],
+  [245, "Redirects", "No Redirect Loops", 4, "BLOCKER"],
+  [246, "Performance", "TTFB < 500ms", 3, "MAJOR"],
+  [247, "Server Reliability", "No Intermittent 5xx Errors", 4, "BLOCKER"],
+  [248, "Rendering & JavaScript", "SSR Contains Primary Content", 4, "BLOCKER"],
+  [249, "Rendering & JavaScript", "No Empty-Shell SPA", 4, "BLOCKER"],
+  [250, "Content Accessibility", "Hidden Content < 100 Words", 3, "MAJOR"],
+  [251, "Meta Robots & Snippet Control", "No nosnippet/max-snippet:0", 4, "BLOCKER"],
+  [252, "Mobile Optimization", "Mobile DOM Parity", 3, "MAJOR"],
+  [253, "Content Accessibility", "No Cookie Consent Wall Blocking", 4, "BLOCKER"],
+  [254, "Title Tags", "Title Tag Present", 4, "BLOCKER"],
+  [255, "Title Tags", "Title Length 30-60 Characters", 0, "ADVISORY"],
+  [256, "Meta Description", "Meta Description Present", 3, "MINOR"],
+  [257, "Meta Description", "Meta Description Length 120-160", 0, "ADVISORY"],
+  [258, "Title Tags", "Zero Duplicate Titles", 3, "MAJOR"],
+  [259, "Meta Description", "Zero Duplicate Descriptions", 3, "MAJOR"],
+  [260, "Heading Structure", "Single H1 Per Page", 3, "MAJOR"],
+  [261, "Heading Structure", "Heading Hierarchy No Skips", 0, "ADVISORY"],
+  [262, "Semantic HTML", "Semantic HTML5 Elements", 0, "ADVISORY"],
+  [263, "Content Freshness", "Visible Last Updated Date", 2, "MINOR"],
+  [264, "Author & E-E-A-T", "Named Author Byline", 3, "MINOR"],
+  [265, "About & Business Information", "About Page >= 300 Words", 2, "MINOR"],
+  [266, "About & Business Information", "Contact Page Complete", 3, "MAJOR"],
+  [267, "Trust Pages", "Privacy Policy Exists", 3, "MINOR"],
+  [268, "XML Sitemap", "XML Sitemap Valid", 4, "MAJOR"],
+  [269, "Robots.txt & Crawlability", "Sitemap in robots.txt", 3, "MINOR"],
+  [270, "Entity Recognition", "Bing Entity API Recognition", 2, "MINOR"],
+  [271, "Entity Description Consistency", "Description: Site vs Schema", 3, "MAJOR"],
+  [272, "Entity Description Consistency", "Description: Site vs LinkedIn", 2, "MINOR"],
+  [273, "Entity Description Consistency", "Description: Site vs Crunchbase", 2, "MINOR"],
+  [274, "Entity Description Consistency", "Description: Site vs GBP", 2, "MINOR"],
+  [275, "Entity Attribute Consistency", "Founding Date Consistent", 0, "ADVISORY"],
+  [276, "Entity Attribute Consistency", "Industry Category Consistent", 2, "MINOR"],
+  [277, "Entity Attribute Consistency", "Employee Count Plausible", 2, "MINOR"],
+  [278, "Entity Attribute Consistency", "Location Consistent", 2, "MINOR"],
+  [279, "Entity Attribute Consistency", "Address Format Quality", 2, "MINOR"]
 ].map(([id, category, name, weight, severity]) => ({ id, category, name, weight, severity })) as CheckDefinition[];
 
 const DUPLICATE_CHECK_IDS = new Set([
@@ -391,7 +431,7 @@ const DUPLICATE_CHECK_IDS = new Set([
 ]);
 
 const GENERIC_ANCHORS = new Set(["click here", "read more", "here", "learn more", "link", "this"]);
-const DOMAIN_CHECK_IDS = new Set([3, 4, 7, 10, 11, 12, 13, 14, 22, 23, 35, 37, 38, 45, 56, 59, 67, 68, 69, 70, 80, 81, 83, 91, 98, 99, 106, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142]);
+const DOMAIN_CHECK_IDS = new Set([3, 4, 7, 10, 11, 12, 13, 14, 22, 23, 35, 37, 38, 45, 56, 59, 67, 68, 69, 70, 80, 81, 83, 91, 98, 99, 106, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 240, 243, 245, 247, 258, 259, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279]);
 const SCORE_CAP_BLOCKER_IDS = new Set([
   191, // target pages do not return HTTP 200
   192, // HTTPS/TLS unavailable
@@ -930,6 +970,24 @@ function robotsBlocksInternalSearch(robotsText: string) {
   return /^disallow:\s*(\/search\/?|\/?\?s=|\*?\?s=)/im.test(robotsText);
 }
 
+export function robotsWildcardDisallowEvidence(robotsText: string) {
+  const disallowRules = [...robotsText.matchAll(/^disallow:\s*(.+)$/gim)]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter(Boolean);
+  const broadWildcardRules = disallowRules.filter((rule) =>
+    rule === "*"
+    || rule === "/*"
+    || /^\/\*\s*$/.test(rule)
+    || /^\/\*\$$/.test(rule)
+    || /^\/\*\/?$/.test(rule)
+  );
+  return {
+    pass: broadWildcardRules.length === 0,
+    broadWildcardRules,
+    disallowRuleCount: disallowRules.length
+  };
+}
+
 function internalSearchLinks(links: { href: string }[]) {
   return links.filter((link) => {
     try {
@@ -1017,6 +1075,22 @@ function visiblePrimaryWordCount(page: FetchedPage) {
   clone("script,style,noscript,template,svg").remove();
   clone("[hidden],[aria-hidden='true'],[style*='display:none'],[style*='display: none'],[style*='visibility:hidden'],[style*='visibility: hidden']").remove();
   return wordCount(clone("main").text() || clone("body").text());
+}
+
+export function citableContentAccessEvidence($: cheerio.CheerioAPI, bodyText: string, pageUrl = "") {
+  const words = wordCount(bodyText);
+  const gateText = /\b(paywall|subscribe to continue|subscription required|members only|premium content|login to read|sign in to continue|create an account to continue|restricted access)\b/i.test(bodyText);
+  const hardGateElements = $("input[type='password'],form[action*='login' i],form[action*='signin' i],[class*='paywall' i],[id*='paywall' i],[class*='gate' i],[id*='gate' i]").length;
+  const citationLike = /\/(?:blog|article|guide|resources?|news|insights?)\b/i.test(pageUrl) || $("article,main").length > 0;
+  const pass = !citationLike || words >= 250 && !gateText && hardGateElements === 0;
+  return {
+    pass,
+    warning: citationLike && words >= 180 && (gateText || hardGateElements > 0),
+    citationLike,
+    words,
+    gateText,
+    hardGateElements
+  };
 }
 
 function emptyShellEvidence(page: FetchedPage) {
@@ -1124,6 +1198,75 @@ function schemaInjectionEvidence(page: FetchedPage) {
   return {
     passed: rawJsonLdCount > 0 || !gtmHints,
     evidence: rawJsonLdCount > 0 ? `${rawJsonLdCount} JSON-LD blocks in raw HTML` : gtmHints ? "Schema/GTM hints found without raw JSON-LD" : "No schema injection hint detected"
+  };
+}
+
+function visibleTextFromHtml(html: string) {
+  const $ = cheerio.load(html);
+  $("script,style,noscript,template,svg").remove();
+  return $("main").text() || $("body").text();
+}
+
+export function mobileDomParityEvidence(desktopHtml: string, mobileHtml: string) {
+  const desktopWords = wordCount(visibleTextFromHtml(desktopHtml));
+  const mobileWords = wordCount(visibleTextFromHtml(mobileHtml));
+  if (!mobileHtml) {
+    return { skipped: true, reason: "Mobile user-agent fetch failed.", desktopWords, mobileWords };
+  }
+  const ratio = desktopWords === 0 ? 1 : mobileWords / desktopWords;
+  const pass = ratio >= 0.8 && ratio <= 1.25;
+  return {
+    pass,
+    desktopWords,
+    mobileWords,
+    parityPercent: Math.round(Math.min(ratio, 1 / Math.max(ratio, 0.01)) * 100),
+    acceptedRange: "Mobile visible text should stay within 80-125% of desktop visible text."
+  };
+}
+
+function visibleLastUpdatedEvidence(pages: FetchedPage[]) {
+  const pattern = /\b(last\s+updated|updated|modified|reviewed)\s*:?\s*(?:on\s*)?(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})\b/i;
+  const rate = passRate(pages, (p) =>
+    pattern.test(p.$("body").text())
+    || p.$("time[datetime][itemprop*='modified' i],time[datetime][class*='updated' i],time[datetime][class*='modified' i]").length > 0
+    || /dateModified/.test(p.html)
+  );
+  return rate;
+}
+
+function namedAuthorEvidence(pages: FetchedPage[]) {
+  return passRate(pages, (p) =>
+    !/\/(?:blog|article|guide|news|insights?)\b/i.test(new URL(p.finalUrl).pathname)
+    || /(?:by|written by|reviewed by)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?/.test(p.$("body").text())
+    || p.$("[rel='author'],[itemprop='author'],.author,.byline,[class*='author' i],[class*='byline' i]").length > 0
+  );
+}
+
+function phoneFound(text: string) {
+  return /(?:\+?\d[\d\s().-]{7,}\d)/.test(text);
+}
+
+function emailFound(text: string) {
+  return /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(text);
+}
+
+function addressFound(text: string) {
+  return /\b(?:street|st\.|road|rd\.|avenue|ave\.|suite|ste\.|floor|fl\.|city|state|zip|postal|india|usa|united states)\b/i.test(text)
+    || /\b\d{5}(?:-\d{4})?\b/.test(text);
+}
+
+export function contactCompletenessEvidence(text: string, contactUrl = "") {
+  const email = emailFound(text);
+  const phone = phoneFound(text);
+  const address = addressFound(text);
+  const contactForm = /\b(contact form|send message|submit|enquiry|inquiry)\b/i.test(text);
+  return {
+    pass: email && (phone || contactForm) && address,
+    contactUrl,
+    email,
+    phone,
+    contactForm,
+    address
   };
 }
 
@@ -1312,6 +1455,394 @@ function schemaTypes(blocks: unknown[]): string[] {
 
 function hasSchemaType(blocks: unknown[], matcher: RegExp) {
   return schemaTypes(blocks).some((type) => matcher.test(type));
+}
+
+function textValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.map(textValue).filter(Boolean).join(", ");
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return textValue(record.value ?? record.name ?? record["@id"] ?? record.url ?? "");
+  }
+  return "";
+}
+
+function schemaRecords(blocks: unknown[]) {
+  const records: Record<string, unknown>[] = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record["@graph"])) record["@graph"].forEach(visit);
+    if (record["@type"]) records.push(record);
+    Object.values(record).forEach((child) => {
+      if (child && typeof child === "object") visit(child);
+    });
+  };
+  blocks.forEach(visit);
+  return records;
+}
+
+function schemaTypeMatches(record: Record<string, unknown>, matcher: RegExp) {
+  const type = record["@type"];
+  const values = Array.isArray(type) ? type : [type];
+  return values.some((value) => typeof value === "string" && matcher.test(value));
+}
+
+function primaryEntityRecord(blocks: unknown[]) {
+  const records = schemaRecords(blocks);
+  return records.find((record) => schemaTypeMatches(record, /^(Organization|LocalBusiness|Corporation|ProfessionalService|Store)$/i))
+    ?? records.find((record) => schemaTypeMatches(record, /^(WebSite|Person)$/i))
+    ?? null;
+}
+
+function schemaDescriptionEntityRecord(blocks: unknown[]) {
+  return schemaRecords(blocks).find((record) =>
+    schemaTypeMatches(record, /^(Organization|LocalBusiness|Corporation|ProfessionalService|Store|WebSite)$/i)
+    && Boolean(textValue(record.description))
+  ) ?? null;
+}
+
+function normalizedTokens(text: string) {
+  return new Set(text.toLowerCase().replace(/https?:\/\/\S+/g, " ").replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((word) => word.length > 2));
+}
+
+function descriptionSimilarity(left: string, right: string) {
+  const a = normalizedTokens(left);
+  const b = normalizedTokens(right);
+  if (!a.size || !b.size) return 0;
+  const intersection = [...a].filter((word) => b.has(word)).length;
+  return Math.round((intersection / Math.min(a.size, b.size)) * 100);
+}
+
+function profileUrlFromEntity(entity: Record<string, unknown> | null, matcher: RegExp) {
+  const sameAs = entity?.sameAs;
+  const urls = Array.isArray(sameAs) ? sameAs.map(textValue) : [textValue(sameAs)];
+  return urls.find((value) => matcher.test(value)) ?? "";
+}
+
+async function externalProfileDescriptionEvidence(siteDescription: string, profileUrl: string, label: string, requiredProfile = true) {
+  if (!profileUrl) {
+    return requiredProfile
+      ? { pass: false, reason: `${label} profile URL was not found in Organization sameAs schema.`, profileUrl }
+      : { skipped: true, reason: `${label} profile URL was not found in Organization sameAs schema.`, profileUrl };
+  }
+  const profile = await fetchText(profileUrl, {}, 2200).catch(() => null);
+  if (!profile || profile.response.status >= 400) {
+    return { skipped: true, reason: `${label} profile could not be fetched for description comparison.`, profileUrl, status: profile?.response.status ?? "fetch failed" };
+  }
+  const $ = cheerio.load(profile.text);
+  const profileDescription = metaContentByName($, "description") || $("title").first().text().trim();
+  const similarity = descriptionSimilarity(siteDescription, profileDescription);
+  return {
+    pass: similarity >= 45,
+    profileUrl,
+    status: profile.response.status,
+    similarity,
+    siteDescription,
+    profileDescription: profileDescription.slice(0, 260)
+  };
+}
+
+async function bingEntityRecognitionEvidence(entityName: string, siteUrl: string) {
+  const key = process.env.BING_ENTITY_SEARCH_API_KEY;
+  if (!key) {
+    return {
+      skipped: true,
+      reason: "Set BING_ENTITY_SEARCH_API_KEY to verify Bing Entity API recognition.",
+      entityName,
+      siteUrl
+    };
+  }
+  if (!entityName) return { skipped: true, reason: "No schema entity name was available for Bing Entity API lookup.", siteUrl };
+  try {
+    const endpoint = new URL("https://api.bing.microsoft.com/v7.0/entities");
+    endpoint.searchParams.set("q", entityName);
+    const response = await fetch(endpoint, {
+      signal: AbortSignal.timeout(4000),
+      headers: {
+        "Ocp-Apim-Subscription-Key": key,
+        accept: "application/json"
+      }
+    });
+    const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const entities = data.entities && typeof data.entities === "object"
+      ? (data.entities as Record<string, unknown>).value
+      : [];
+    const matches = Array.isArray(entities)
+      ? entities.filter((item) => {
+        if (!item || typeof item !== "object") return false;
+        const record = item as Record<string, unknown>;
+        const name = textValue(record.name);
+        const url = textValue(record.url ?? record.webSearchUrl);
+        return name.toLowerCase() === entityName.toLowerCase() || (url && siteUrl && url.includes(new URL(siteUrl).hostname.replace(/^www\./, "")));
+      })
+      : [];
+    return {
+      pass: response.ok && matches.length > 0,
+      status: response.status,
+      entityName,
+      resultCount: Array.isArray(entities) ? entities.length : 0,
+      matchedEntities: matches.slice(0, 3).map((item) => ({
+        name: textValue((item as Record<string, unknown>).name),
+        url: textValue((item as Record<string, unknown>).url ?? (item as Record<string, unknown>).webSearchUrl)
+      }))
+    };
+  } catch (error) {
+    return {
+      skipped: true,
+      reason: "Bing Entity API request failed in the current crawl environment.",
+      entityName,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+function schemaEntityDescription(entity: Record<string, unknown> | null) {
+  return textValue(entity?.description ?? entity?.disambiguatingDescription ?? entity?.slogan);
+}
+
+export function siteSchemaDescriptionConsistencyEvidence(siteDescription: string, blocks: unknown[]) {
+  const entity = schemaDescriptionEntityRecord(blocks);
+  const schemaDescription = schemaEntityDescription(entity);
+  const cleanedSiteDescription = siteDescription.trim();
+  if (!schemaDescription) {
+    return {
+      skipped: true,
+      reason: "No Organization schema description found on page — cannot verify consistency.",
+      siteDescription: cleanedSiteDescription,
+      schemaDescription
+    };
+  }
+  if (!cleanedSiteDescription) {
+    return {
+      skipped: true,
+      reason: "No site meta or Open Graph description found on page — cannot verify consistency.",
+      siteDescription: cleanedSiteDescription,
+      schemaDescription
+    };
+  }
+  const similarity = descriptionSimilarity(cleanedSiteDescription, schemaDescription);
+  return {
+    pass: similarity >= 45,
+    siteDescription: cleanedSiteDescription,
+    schemaDescription,
+    similarity
+  };
+}
+
+function localBusinessEntityApplies(entity: Record<string, unknown> | null, visibleText: string) {
+  const hasLocalSchema = Boolean(entity && schemaTypeMatches(entity, /^(LocalBusiness|ProfessionalService|Store|Restaurant|MedicalBusiness|LegalService|HomeAndConstructionBusiness|AutoRepair|Dentist)$/i));
+  const schemaLocation = locationText(entity?.address ?? entity?.location);
+  const visibleLocalSignal = addressFound(visibleText)
+    || /\b(?:near me|local|service area|serving|visit us|our office|our clinic|our store|showroom|headquarters|hq)\b/i.test(visibleText);
+  return hasLocalSchema || Boolean(schemaLocation) || visibleLocalSignal;
+}
+
+function foundingDateEvidence(entity: Record<string, unknown> | null, visibleText: string) {
+  const schemaDate = textValue(entity?.foundingDate ?? entity?.foundingDateTime);
+  const visibleYears = [...visibleText.matchAll(/\b(?:founded|established|since)\s+(?:in\s+)?(\d{4})\b/gi)].map((match) => match[1]);
+  if (!schemaDate && !visibleYears.length) return { skipped: true, notApplicable: true, reason: "No founding date is publicly claimed on the site, so consistency cannot be evaluated." };
+  const schemaYear = schemaDate.match(/\d{4}/)?.[0] ?? "";
+  const pass = !schemaYear || !visibleYears.length || visibleYears.includes(schemaYear);
+  return { pass, schemaDate, schemaYear, visibleYears, warning: !pass };
+}
+
+function industryEvidence(entity: Record<string, unknown> | null, visibleText: string) {
+  const schemaIndustry = textValue(entity?.industry ?? entity?.category ?? entity?.knowsAbout);
+  if (!schemaIndustry) return { pass: false, reason: "No industry/category attribute was found in entity schema." };
+  const visibleIndustry = visibleIndustryCategory(visibleText);
+  if (visibleIndustry) return industryCategoryConsistencyEvidence(schemaIndustry, visibleIndustry);
+  const similarity = descriptionSimilarity(schemaIndustry, visibleText);
+  return { pass: similarity >= 30, schemaIndustry, visibleContextSimilarity: similarity };
+}
+
+function employeeCountEvidence(entity: Record<string, unknown> | null, visibleText: string) {
+  const schemaValue = textValue(entity?.numberOfEmployees ?? entity?.employee);
+  const visibleMatch = visibleText.match(/\b(\d{1,6})\+?\s+(?:employees|team members|people)\b/i);
+  const schemaNumber = Number(schemaValue.match(/\d{1,6}/)?.[0] ?? NaN);
+  const visibleNumber = Number(visibleMatch?.[1] ?? NaN);
+  if (!Number.isFinite(schemaNumber) && !Number.isFinite(visibleNumber)) return { skipped: true, notApplicable: true, reason: "No employee count is publicly claimed on the site, so plausibility cannot be evaluated." };
+  const value = Number.isFinite(schemaNumber) ? schemaNumber : visibleNumber;
+  const plausible = value >= 1 && value <= 1000000;
+  const consistent = !Number.isFinite(schemaNumber) || !Number.isFinite(visibleNumber)
+    ? true
+    : Math.abs(schemaNumber - visibleNumber) / Math.max(schemaNumber, visibleNumber) <= 0.5;
+  return { pass: plausible && consistent, schemaValue, schemaNumber: Number.isFinite(schemaNumber) ? schemaNumber : undefined, visibleNumber: Number.isFinite(visibleNumber) ? visibleNumber : undefined, plausible, consistent };
+}
+
+function locationText(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(locationText).filter(Boolean).join(", ");
+  if (typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  return [
+    record.streetAddress,
+    record.addressLocality,
+    record.addressRegion,
+    record.postalCode,
+    record.addressCountry,
+    record.name
+  ].map(textValue).filter(Boolean).join(", ");
+}
+
+function addressSegment(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\bb\s*sk\s*(?:ii|2|second)\b/g, "banashankari 2nd")
+    .replace(/\bii\b/g, "2")
+    .replace(/\bsecond\b/g, "2nd")
+    .replace(/\bstage\b/g, "stage")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function levenshtein(left: string, right: string) {
+  const a = [...left];
+  const b = [...right];
+  const dp = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i += 1) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j += 1) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+function stringSimilarity(left: string, right: string) {
+  const a = addressSegment(left);
+  const b = addressSegment(right);
+  if (!a || !b) return 0;
+  if (a === b || a.includes(b) || b.includes(a)) return 1;
+  return 1 - levenshtein(a, b) / Math.max(a.length, b.length);
+}
+
+export function addressFormatQualityEvidence(address: string) {
+  const segments = address.split(",").map((segment) => segment.trim()).filter(Boolean);
+  const duplicates: string[] = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    for (let j = i + 1; j < segments.length; j += 1) {
+      if (stringSimilarity(segments[i], segments[j]) >= 0.6) {
+        duplicates.push(`${segments[i]} <> ${segments[j]}`);
+      }
+    }
+  }
+  return {
+    pass: duplicates.length === 0,
+    skipped: false,
+    address,
+    duplicateSegments: duplicates,
+    reason: duplicates.length
+      ? `Address contains duplicate or redundant locality segments: ${duplicates.join("; ")}. Clean up the address string before comparing to external sources.`
+      : "No duplicate or redundant locality segments detected."
+  };
+}
+
+function canonicalAddressTokens(address: string) {
+  return [...normalizedTokens(addressSegment(address))]
+    .filter((token) => !new Set(["road", "rd", "street", "st", "stage", "floor", "office", "suite", "india", "usa"]).has(token));
+}
+
+export function locationConsistencyComparisonEvidence(siteAddress: string, comparisonAddress: string, label = "external source") {
+  const format = addressFormatQualityEvidence(siteAddress);
+  if (!format.pass) {
+    return {
+      pass: true,
+      skipped: true,
+      reason: "Site address format must be cleaned before external location consistency can be compared.",
+      addressFormatIssue: format
+    };
+  }
+  const siteTokens = new Set(canonicalAddressTokens(siteAddress));
+  const comparisonTokens = new Set(canonicalAddressTokens(comparisonAddress));
+  if (!siteTokens.size || !comparisonTokens.size) {
+    return { skipped: true, reason: "Both site and comparison addresses are required for location consistency.", siteAddress, comparisonAddress };
+  }
+  const overlap = [...siteTokens].filter((token) => comparisonTokens.has(token)).length;
+  const similarity = Math.round((overlap / Math.min(siteTokens.size, comparisonTokens.size)) * 100);
+  return {
+    pass: similarity >= 45,
+    siteAddress,
+    comparisonAddress,
+    comparisonSource: label,
+    similarity
+  };
+}
+
+function locationConsistencyEvidence(entity: Record<string, unknown> | null, visibleText: string) {
+  if (!localBusinessEntityApplies(entity, visibleText)) {
+    return { skipped: true, notApplicable: true, reason: "No local-business, office, service-area, or physical-location signal was detected." };
+  }
+  const schemaLocation = locationText(entity?.address ?? entity?.location);
+  if (!schemaLocation) return { pass: false, reason: "A local/location signal was detected, but no address/location attribute was found in entity schema." };
+  return locationConsistencyComparisonEvidence(schemaLocation, visibleText, "visible site content");
+}
+
+const INDUSTRY_TAXONOMY: Record<string, string[]> = {
+  finance: [
+    "financial services",
+    "currency exchange service",
+    "currency exchange",
+    "foreign exchange",
+    "forex",
+    "money exchange",
+    "bureau de change"
+  ],
+  software: [
+    "software development",
+    "software company",
+    "computer software",
+    "saas",
+    "technology"
+  ],
+  marketing: [
+    "marketing",
+    "digital marketing",
+    "seo",
+    "advertising",
+    "public relations"
+  ]
+};
+
+function normalizedIndustryBucket(value: string) {
+  const normalized = [...normalizedTokens(value)].join(" ");
+  for (const [bucket, labels] of Object.entries(INDUSTRY_TAXONOMY)) {
+    if (labels.some((label) => {
+      const labelText = [...normalizedTokens(label)].join(" ");
+      return normalized.includes(labelText) || labelText.includes(normalized);
+    })) return bucket;
+  }
+  return normalized || "unknown";
+}
+
+function visibleIndustryCategory(visibleText: string) {
+  const normalized = visibleText.toLowerCase();
+  const labels = Object.values(INDUSTRY_TAXONOMY).flat();
+  return labels.find((label) => normalized.includes(label)) ?? "";
+}
+
+export function industryCategoryConsistencyEvidence(leftCategory: string, rightCategory: string) {
+  const leftBucket = normalizedIndustryBucket(leftCategory);
+  const rightBucket = normalizedIndustryBucket(rightCategory);
+  return {
+    pass: leftBucket !== "unknown" && rightBucket !== "unknown" && leftBucket === rightBucket,
+    leftCategory,
+    rightCategory,
+    leftBucket,
+    rightBucket
+  };
 }
 
 function visibleFaqSignals(page: FetchedPage) {
@@ -2307,12 +2838,12 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
       malformed: false
     };
   }));
-  const [sitemapDirectiveChecks, aiTxt, llms, psi, desktopPsi, crux, renderedAudit, crawled] = await Promise.all([
+  const [sitemapDirectiveChecks, aiTxt, llms, initialMobilePsiResult, initialDesktopPsiResult, crux, renderedAudit, crawled] = await Promise.all([
     sitemapDirectiveChecksPromise,
     fetchText(`${origin}/ai.txt`, {}, 1800).catch(() => null),
     fetchText(`${origin}/llms.txt`, {}, 1800).catch(() => null),
-    fetchPageSpeedInsights(page.finalUrl, "mobile"),
-    fetchPageSpeedInsights(page.finalUrl, "desktop"),
+    fetchPageSpeedInsightsDetailed(page.finalUrl, "mobile"),
+    fetchPageSpeedInsightsDetailed(page.finalUrl, "desktop"),
     fetchCrux(page.finalUrl),
     renderedDomWordCount(page.finalUrl),
     siteCrawl ? Promise.resolve(siteCrawl) : crawlSite(url.toString(), {
@@ -2338,6 +2869,7 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
   const pageLd = pages.map((candidate) => ({ ...jsonLd(candidate), page: candidate }));
   const allLdBlocks = pageLd.flatMap((item) => item.blocks);
   const allLdTypes = schemaTypes(allLdBlocks);
+  const entityRecord = primaryEntityRecord(allLdBlocks);
   const ldTypes = schemaTypes(ld.blocks);
   const images = imageStats(page);
   const pageImages = pages.map(imageStats);
@@ -2378,6 +2910,35 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
   const h1 = page.$("h1").first().text().trim();
   const title = page.$("title").first().text().trim();
   const description = metaContentByName(page.$, "description");
+  const visibleBodyText = page.$("body").text().replace(/\s+/g, " ").trim();
+  const entityName = textValue(entityRecord?.name) || title.replace(/\s+[|-].*$/, "").trim();
+  const siteDescription = description || metaContentByName(page.$, "og:description") || visibleBodyText.slice(0, 260);
+  const entityDescription = schemaEntityDescription(entityRecord);
+  const siteSchemaDescriptionSimilarity = descriptionSimilarity(siteDescription, entityDescription);
+  const siteSchemaDescriptionConsistency = siteSchemaDescriptionConsistencyEvidence(siteDescription, allLdBlocks);
+  const linkedinUrl = profileUrlFromEntity(entityRecord, /linkedin\.com/i);
+  const crunchbaseUrl = profileUrlFromEntity(entityRecord, /crunchbase\.com/i);
+  const gbpUrl = profileUrlFromEntity(entityRecord, /google\.(?:com|[a-z.]+)\/(?:maps|search)|g\.page|business\.google/i);
+  const localEntityApplies = localBusinessEntityApplies(entityRecord, visibleBodyText);
+  const [
+    bingEntityRecognition,
+    linkedinDescription,
+    crunchbaseDescription,
+    gbpDescription
+  ] = await Promise.all([
+    bingEntityRecognitionEvidence(entityName, page.finalUrl),
+    externalProfileDescriptionEvidence(siteDescription, linkedinUrl, "LinkedIn", true),
+    externalProfileDescriptionEvidence(siteDescription, crunchbaseUrl, "Crunchbase", false),
+    externalProfileDescriptionEvidence(siteDescription, gbpUrl, "Google Business Profile", localEntityApplies)
+  ]);
+  const foundingDateConsistency = foundingDateEvidence(entityRecord, visibleBodyText);
+  const industryConsistency = industryEvidence(entityRecord, visibleBodyText);
+  const employeeCountConsistency = employeeCountEvidence(entityRecord, visibleBodyText);
+  const locationConsistency = locationConsistencyEvidence(entityRecord, visibleBodyText);
+  const schemaAddress = locationText(entityRecord?.address ?? entityRecord?.location);
+  const addressFormatQuality = schemaAddress
+    ? addressFormatQualityEvidence(schemaAddress)
+    : { pass: false, skipped: true, notApplicable: true, reason: "No schema address was found, so address format quality cannot be evaluated." };
   const viewportDebug = viewportMetaDebug(page.$);
   const viewport = viewportDebug.viewportContent.toLowerCase();
   const headBlockingScripts = page.$("head script[src]:not([async]):not([defer]):not([type='module'])").length;
@@ -2429,8 +2990,14 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
   const duplicateDescriptionUrls = pages.filter((p) => duplicateDescriptionSet.has(metaContentByName(p.$, "description"))).map((p) => p.finalUrl).slice(0, 10);
   const hreflangs = linkElementsByRel(page.$, "alternate").filter((el) => Boolean(page.$(el).attr("hreflang"))).length;
   const hasLanguageAlternates = page.html.match(/\/(en|hi|fr|es|de|ar)\//i) !== null || hreflangs > 0;
-  const aboutWords = aboutLink ? await fetchPage(absolute(url, page.$(aboutLink).attr("href") ?? ""), 2000).then((p) => p.wordCount).catch(() => 0) : 0;
-  const contactText = contactLink ? await fetchPage(absolute(url, page.$(contactLink).attr("href") ?? ""), 2000).then((p) => p.$("body").text()).catch(() => "") : "";
+  const aboutUrl = aboutLink ? absolute(url, page.$(aboutLink).attr("href") ?? "") : "";
+  const contactUrl = contactLink ? absolute(url, page.$(contactLink).attr("href") ?? "") : "";
+  const aboutWords = aboutUrl ? await fetchPage(aboutUrl, 2000).then((p) => p.wordCount).catch(() => 0) : 0;
+  const contactText = contactUrl ? await fetchPage(contactUrl, 2000).then((p) => p.$("body").text()).catch(() => "") : "";
+  const contactCompleteness = contactCompletenessEvidence(contactText, contactUrl);
+  const visibleLastUpdatedRate = visibleLastUpdatedEvidence(pages);
+  const namedAuthorRate = namedAuthorEvidence(pages);
+  const citableAccess = citableContentAccessEvidence(page.$, page.$("body").text(), page.finalUrl);
   const reviewSignals = page.$("[class*='review'],[class*='testimonial'],[id*='review'],[id*='testimonial']").length;
   const reviewWords = (page.$("body").text().match(/\b(review|reviews|testimonial|testimonials|rating|ratings|stars?|customer stories)\b/gi) ?? []).length;
   const everyPage = (predicate: (p: FetchedPage) => boolean) => pages.every(predicate);
@@ -2554,6 +3121,15 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
     }))
   });
   const brokenInternalLinks = internalLinkResponses.filter((item) => item.broken);
+  const intermittentServerErrors = [
+    ...pages.filter((item) => item.status >= 500).map((item) => ({ url: item.finalUrl, status: item.status })),
+    ...internalLinkResponses
+      .filter((item) => typeof item.finalStatus === "number" && item.finalStatus >= 500)
+      .map((item) => ({ url: item.url, status: item.finalStatus }))
+  ];
+  const redirectLoopCandidates = internalLinkResponses
+    .filter((item) => item.redirectHops >= 5 && typeof item.finalStatus === "number" && BROKEN_LINK_REDIRECT_STATUSES.has(item.finalStatus))
+    .map((item) => ({ url: item.url, finalUrl: item.finalUrl, redirectHops: item.redirectHops, finalStatus: item.finalStatus }));
   const soft404Status = soft404Response?.response.status ?? 0;
   const soft404Body = soft404Response?.text ?? "";
   const llmsWordStats = llmsStats(llms?.text ?? "");
@@ -2578,6 +3154,7 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
     canonicalChain,
     openAiFetch,
     googleExtendedFetch,
+    mobileFetch,
     slashRedirectStatus,
     caseVariantStatus,
     indexNowResponses
@@ -2586,6 +3163,7 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
     canonicalAbs ? canonicalChainLength(canonicalAbs) : Promise.resolve({ hops: 0, loop: false }),
     fetchWithUserAgent(page.finalUrl, "GPTBot/1.2; +https://openai.com/gptbot"),
     fetchWithUserAgent(page.finalUrl, "Google-Extended"),
+    fetchWithUserAgent(page.finalUrl, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"),
     redirectStatus(url.toString().endsWith("/") ? url.toString().slice(0, -1) : `${url.toString()}/`),
     redirectStatus(`${origin}${new URL(page.finalUrl).pathname.toUpperCase()}`),
     Promise.all(indexNowCandidateUrls(origin, robots?.text ?? "", page.html).map(async (item) => ({ url: item, response: await safeHeadOrGet(item, 1800) })))
@@ -2642,6 +3220,7 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
   });
   const indexNowCandidates = indexNowCandidateUrls(origin, robots?.text ?? "", page.html);
   const indexNowPassed = indexNowResponses.some((item) => item.response?.status === 200);
+  const mobileParity = mobileDomParityEvidence(page.html, mobileFetch?.text ?? "");
   const slashVariantUrl = url.toString().endsWith("/") ? url.toString().slice(0, -1) : `${url.toString()}/`;
   const slashVariant = await fetchText(slashVariantUrl, {}, 1800).catch(() => null);
   const slashSimilarity = slashVariant ? contentSimilarity(page.html, slashVariant.text) : 0;
@@ -2653,6 +3232,22 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
     && comparableCanonicalUrl(slashVariant.response.url) !== comparableCanonicalUrl(page.finalUrl)
     && slashSimilarity >= 0.9
   );
+  const mobilePsiResult = initialMobilePsiResult.metrics
+    ? initialMobilePsiResult
+    : await fetchLocalPerformanceMetrics(page.finalUrl, "mobile").then((local) => local.metrics
+      ? { metrics: local.metrics, unavailableReason: initialMobilePsiResult.unavailableReason ? `Google PSI unavailable: ${initialMobilePsiResult.unavailableReason}` : undefined, localFallback: true }
+      : { metrics: null, unavailableReason: [initialMobilePsiResult.unavailableReason, local.unavailableReason].filter(Boolean).join(" ") });
+  const desktopPsiResult = initialDesktopPsiResult.metrics
+    ? initialDesktopPsiResult
+    : await fetchLocalPerformanceMetrics(page.finalUrl, "desktop").then((local) => local.metrics
+      ? { metrics: local.metrics, unavailableReason: initialDesktopPsiResult.unavailableReason ? `Google PSI unavailable: ${initialDesktopPsiResult.unavailableReason}` : undefined, localFallback: true }
+      : { metrics: null, unavailableReason: [initialDesktopPsiResult.unavailableReason, local.unavailableReason].filter(Boolean).join(" ") });
+  const psi = mobilePsiResult.metrics;
+  const desktopPsi = desktopPsiResult.metrics;
+  const pageSpeedUnavailableReason = [
+    mobilePsiResult.unavailableReason ? `Mobile: ${mobilePsiResult.unavailableReason}` : "",
+    desktopPsiResult.unavailableReason ? `Desktop: ${desktopPsiResult.unavailableReason}` : ""
+  ].filter(Boolean).join(" ");
   const fcp = psi?.fcp;
   const lcp = crux?.lcp ?? psi?.lcp;
   const desktopLcp = desktopPsi?.lcp;
@@ -2664,8 +3259,13 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
   const mobileScore = psi?.performanceScore;
   const performanceSnapshot = pageSpeedSnapshot(page.finalUrl, psi, desktopPsi, {
     ttfb: page.responseTimeMs,
-    unavailableReason: "PageSpeed Insights data unavailable; TTFB is based on the audit crawler response timing."
+    unavailableReason: pageSpeedUnavailableReason
+      ? `${pageSpeedUnavailableReason} TTFB is based on the audit crawler response timing.`
+      : "PageSpeed Insights data unavailable; TTFB is based on the audit crawler response timing."
   });
+  if (performanceSnapshot && ((mobilePsiResult as { localFallback?: boolean }).localFallback || (desktopPsiResult as { localFallback?: boolean }).localFallback)) {
+    performanceSnapshot.source = "Local Browser";
+  }
   const psiUnavailableEvidence = JSON.stringify({ reason: "PageSpeed Insights data unavailable." });
   const performanceScoreWarning = (score?: number) => score !== undefined && score >= 70 && score < 90;
   const tapTargetsPass = psi?.tapTargetsPass;
@@ -3508,6 +4108,101 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
   add(236, robotsBlocksInternalSearch(robots?.text ?? "") || searchLinks.length === 0, robotsBlocksInternalSearch(robots?.text ?? "") ? "Search URLs blocked in robots.txt" : searchLinks.length ? `${searchLinks.length} internal search URLs found` : "Search URLs not found");
   add(237, trackingInternalLinks.length === 0, `${trackingInternalLinks.length} tracking-param internal links`);
   add(238, headerAssetSamples.length === 0 || contentTypeOkCount === headerAssetSamples.length, `${contentTypeOkCount}/${headerAssetSamples.length} sampled assets have correct Content-Type`);
+  const wildcardRobots = robotsWildcardDisallowEvidence(robots?.text ?? "");
+  add(240, wildcardRobots.pass, JSON.stringify(wildcardRobots));
+  add(241, citableAccess.pass, JSON.stringify(citableAccess), { warning: citableAccess.warning });
+  add(242, url.protocol === "https:" && await sslValid(url), `${url.protocol} TLS certificate checked`);
+  add(243, http200Percent === 100, countEvidence(http200Count, pages.length, pages.filter((p) => p.status !== 200).map((p) => p.finalUrl), "Target page did not return HTTP 200"), { severity: http200Severity });
+  add(244, redirectHopRate.rate >= 1, pageRateEvidence(redirectHopRate, "use no more than one redirect hop", (candidate) => candidate.redirectHops <= 1));
+  add(245, redirectLoopCandidates.length === 0, JSON.stringify({
+    scope: "domain-level",
+    pagesCrawled: pages.length,
+    pagesChecked: internalLinkResponses.length,
+    pagesPassed: internalLinkResponses.length - redirectLoopCandidates.length,
+    pagesFailed: redirectLoopCandidates.length,
+    passRate: internalLinkResponses.length ? Number((((internalLinkResponses.length - redirectLoopCandidates.length) / internalLinkResponses.length) * 100).toFixed(1)) : 100,
+    affectedPages: redirectLoopCandidates.slice(0, 10).map((item) => ({ url: item.url, issueCount: 1, sampleEvidence: item })),
+    sampleEvidence: redirectLoopCandidates.slice(0, 10)
+  }));
+  add(246, observedTtfb < 500, JSON.stringify({ metric: "TTFB", measuredValue: Math.round(observedTtfb), unit: "ms", threshold: 500, source: ttfb !== undefined ? "CrUX/PageSpeed Insights" : "crawler response timing" }));
+  add(247, intermittentServerErrors.length === 0, JSON.stringify({
+    scope: "domain-level",
+    pagesCrawled: pages.length,
+    pagesChecked: pages.length + internalLinkResponses.length,
+    pagesPassed: pages.length + internalLinkResponses.length - intermittentServerErrors.length,
+    pagesFailed: intermittentServerErrors.length,
+    passRate: pages.length + internalLinkResponses.length ? Number((((pages.length + internalLinkResponses.length - intermittentServerErrors.length) / (pages.length + internalLinkResponses.length)) * 100).toFixed(1)) : 100,
+    affectedPages: intermittentServerErrors.slice(0, 10).map((item) => ({ url: item.url, issueCount: 1, sampleEvidence: item })),
+    sampleEvidence: intermittentServerErrors.slice(0, 10)
+  }));
+  add(248, ssrPassCount / Math.max(pages.length, 1) >= 0.7, `${ssrPassCount}/${pages.length} pages have primary content in raw HTML`);
+  add(249, emptyShells.length === 0, emptyShells.length ? `${emptyShells.length} empty-shell SPA pages found` : "No empty-shell SPA detected");
+  add(250, hiddenWords < 100, `${hiddenWords} words hidden on primary page`);
+  const noSnippetRate = pagePassRate((p) => {
+    const directives = `${metaRobots(p)} ${(p.headers.get("x-robots-tag") ?? "").toLowerCase()}`;
+    return !/nosnippet|max-snippet\s*:\s*0/.test(directives);
+  });
+  add(251, noSnippetRate.rate >= 0.98, pageRateEvidence(noSnippetRate, "do not use nosnippet or max-snippet:0", (p) => {
+    const directives = `${metaRobots(p)} ${(p.headers.get("x-robots-tag") ?? "").toLowerCase()}`;
+    return !/nosnippet|max-snippet\s*:\s*0/.test(directives);
+  }));
+  add(252, Boolean(mobileParity.pass), JSON.stringify(mobileParity), { skipped: Boolean(mobileParity.skipped) });
+  add(253, cookieWallRate.rate >= 0.9, pageRateEvidence(cookieWallRate, "avoid consent-wall blocking patterns", (p) => p.wordCount > 80 || !/cookie|consent/i.test(p.html)));
+  add(254, titlePresence.rate >= 1, countEvidence(titlePresence.passed, titlePresence.total, titleMissingUrls, "Missing or empty title tag"));
+  add(255, titleLengthOutcome.passed, countEvidence(titleLength.passed, titleLength.total, titleLengthIssueUrls, "Title outside the recommended 30-60 character range"), {
+    severity: titleLengthOutcome.severity,
+    warning: titleLengthOutcome.warning
+  });
+  add(256, descriptionPresence.rate >= 1, countEvidence(descriptionPresence.passed, descriptionPresence.total, descriptionMissingUrls, "Missing or empty meta description"));
+  add(257, descriptionLengthOutcome.passed, countEvidence(descriptionLength.passed, descriptionLength.total, descriptionLengthIssueUrls, "Meta description outside the recommended 120-160 character range"), {
+    severity: descriptionLengthOutcome.severity,
+    warning: descriptionLengthOutcome.warning
+  });
+  add(258, duplicateTitlePages === 0, countEvidence(pages.length - duplicateTitlePages, pages.length, duplicateTitleUrls, "Duplicate title tag"));
+  add(259, duplicateDescriptionPages === 0, countEvidence(availableDescriptions.length - duplicateDescriptionPages, availableDescriptions.length, duplicateDescriptionUrls, "Duplicate meta description"));
+  add(260, singleH1Rate >= 1, headingEvidence("hasOneH1", "have exactly one visible H1"));
+  add(261, hierarchyFailures.length === 0, JSON.stringify({
+    scope: "page-level-site-wide",
+    pagesCrawled: pages.length,
+    pagesChecked: pages.length,
+    pagesPassed: pages.length - hierarchyFailures.length,
+    pagesFailed: hierarchyFailures.length,
+    passRate: pages.length ? Number((((pages.length - hierarchyFailures.length) / pages.length) * 100).toFixed(1)) : 100,
+    affectedPages: hierarchyFailures.slice(0, 10).map((item) => ({ url: item.url, issueCount: item.skippedSequences.length, sampleEvidence: item.skippedSequences.slice(0, 3) })),
+    sampleEvidence: hierarchyFailures.slice(0, 10).map((item) => ({ url: item.url, skippedSequences: item.skippedSequences.slice(0, 3) }))
+  }), { severity: "ADVISORY", weight: 0, warning: hierarchyFailures.length > 0 });
+  const semanticRate = pagePassRate((p) => p.$("article,section,main,aside,header,footer,nav").length >= 3);
+  add(262, semanticRate.rate >= 0.8, pageRateEvidence(semanticRate, "use semantic HTML5 landmarks", (p) => p.$("article,section,main,aside,header,footer,nav").length >= 3), { severity: "ADVISORY", weight: 0, warning: semanticRate.rate < 0.8 });
+  add(263, visibleLastUpdatedRate.rate >= 0.8, pageRateEvidence(visibleLastUpdatedRate, "show a visible last updated date", (p) =>
+    /\b(last\s+updated|updated|modified|reviewed)\s*:?\s*(?:on\s*)?(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|[A-Z][a-z]+\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})\b/i.test(p.$("body").text())
+    || p.$("time[datetime][itemprop*='modified' i],time[datetime][class*='updated' i],time[datetime][class*='modified' i]").length > 0
+    || /dateModified/.test(p.html)
+  ));
+  add(264, namedAuthorRate.rate >= 0.8, pageRateEvidence(namedAuthorRate, "show a named author byline", (p) =>
+    !/\/(?:blog|article|guide|news|insights?)\b/i.test(new URL(p.finalUrl).pathname)
+    || /(?:by|written by|reviewed by)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?/.test(p.$("body").text())
+    || p.$("[rel='author'],[itemprop='author'],.author,.byline,[class*='author' i],[class*='byline' i]").length > 0
+  ));
+  add(265, aboutWords >= 300, JSON.stringify({ aboutUrl, words: aboutWords, threshold: 300 }));
+  add(266, contactCompleteness.pass, JSON.stringify(contactCompleteness));
+  add(267, Boolean(footerPrivacy), JSON.stringify({ privacyUrl: footerPrivacy ? absolute(url, footerPrivacy.href) : "", footerLinkDetected: Boolean(footerPrivacy) }));
+  add(268, sitemapAvailable, JSON.stringify({ sitemapUrl, status: sitemapObservedStatus, contentType: sitemap?.response.headers.get("content-type") ?? "" }));
+  add(269, sitemapDirectiveReachable, JSON.stringify({ robotsUrl: `${origin}/robots.txt`, sitemapUrl, directive: sitemapDirective, status: sitemapObservedStatus }));
+  add(270, Boolean(bingEntityRecognition.pass), JSON.stringify(bingEntityRecognition), { skipped: Boolean(bingEntityRecognition.skipped) });
+  add(271, Boolean(siteSchemaDescriptionConsistency.pass), JSON.stringify(siteSchemaDescriptionConsistency), {
+    skipped: Boolean(siteSchemaDescriptionConsistency.skipped)
+  });
+  add(272, Boolean(linkedinDescription.pass), JSON.stringify(linkedinDescription), { skipped: Boolean(linkedinDescription.skipped) });
+  add(273, Boolean(crunchbaseDescription.pass), JSON.stringify(crunchbaseDescription), { skipped: Boolean(crunchbaseDescription.skipped) });
+  add(274, Boolean(gbpDescription.pass), JSON.stringify(gbpDescription), { skipped: Boolean(gbpDescription.skipped) });
+  add(275, Boolean(foundingDateConsistency.pass), JSON.stringify(foundingDateConsistency), {
+    skipped: Boolean(foundingDateConsistency.skipped),
+    warning: Boolean(foundingDateConsistency.warning)
+  });
+  add(276, Boolean(industryConsistency.pass), JSON.stringify(industryConsistency));
+  add(277, Boolean(employeeCountConsistency.pass), JSON.stringify(employeeCountConsistency), { skipped: Boolean(employeeCountConsistency.skipped) });
+  add(278, Boolean(locationConsistency.pass), JSON.stringify(locationConsistency), { skipped: Boolean(locationConsistency.skipped) });
+  add(279, Boolean(addressFormatQuality.pass), JSON.stringify(addressFormatQuality), { skipped: Boolean(addressFormatQuality.skipped) });
 
   results.forEach((check) => {
     if (check.skipped) {

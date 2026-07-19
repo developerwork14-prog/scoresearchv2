@@ -625,6 +625,221 @@
   line-height: 1.35;
 }
 
+.pageSpeedPanel {
+  display: grid;
+  gap: 18px;
+}
+
+.pageSpeedGrid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) repeat(2, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.pageSpeedOverviewCard,
+.pageSpeedTableCard,
+.pageSpeedIssueCard {
+  min-width: 0;
+  border-radius: 10px;
+  padding: 18px;
+}
+
+.pageSpeedOverviewCard {
+  grid-row: span 2;
+}
+
+.pageSpeedScoreWrap {
+  display: grid;
+  grid-template-columns: minmax(150px, 180px) 1fr;
+  align-items: center;
+  gap: 16px;
+}
+
+.pageSpeedNotice {
+  margin: -4px 0 14px;
+  border: 1px solid #E8D4A8;
+  border-radius: 8px;
+  background: #FFF9ED;
+  color: #6F5618;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.pageSpeedGauge {
+  width: 100%;
+  max-width: 180px;
+  height: auto;
+}
+
+.pageSpeedGauge circle:nth-of-type(2) {
+  animation: drawGauge 900ms ease 180ms both;
+}
+
+.pageSpeedGaugeText {
+  fill: #111;
+  font-size: 42px;
+  font-weight: 800;
+}
+
+.pageSpeedGaugeSub {
+  fill: #1F9D55;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.pageSpeedMiniScores {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pageSpeedMiniScores div {
+  min-height: 76px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #FAFAFA;
+  padding: 12px;
+}
+
+.pageSpeedMiniScores span,
+.pageSpeedRows span,
+.resourceRows span {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.pageSpeedMiniScores strong {
+  display: block;
+  margin-top: 9px;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.pageSpeedRows,
+.resourceRows {
+  display: grid;
+  gap: 8px;
+}
+
+.pageSpeedRows div,
+.resourceRows div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.pageSpeedRows div:last-child,
+.resourceRows div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.pageSpeedRows span b,
+.pageSpeedRows span small {
+  display: block;
+}
+
+.pageSpeedRows span b {
+  color: #111;
+  font-size: 13px;
+}
+
+.pageSpeedRows span small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pageSpeedRows strong,
+.resourceRows strong {
+  color: #111;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pageSpeedRows em {
+  min-width: 78px;
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.resourceRows i {
+  width: 42px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.pageSpeedIssueCard {
+  grid-column: span 2;
+}
+
+.pageSpeedIssueCard ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pageSpeedIssueCard li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #FAFAFA;
+  padding: 8px 10px;
+}
+
+.pageSpeedIssueCard li b {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: #FBEAEA;
+  color: #DC2626;
+  font-size: 11px;
+}
+
+.pageSpeedIssueCard li span {
+  overflow: hidden;
+  color: #111;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pageSpeedIssueCard li em {
+  border-radius: 999px;
+  background: #FBEAEA;
+  color: #DC2626;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .chartGrid .card,
 .cardTitle + .engineGrid {
   padding: 22px;
@@ -1112,6 +1327,197 @@
   color: var(--secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.integrationWorkspace {
+  display: grid;
+  gap: 18px;
+}
+
+.integrationGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.integrationCard {
+  display: flex;
+  min-height: 430px;
+  flex-direction: column;
+  padding: 18px;
+}
+
+.integrationCardTop {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.integrationCardTop h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.integrationCardTop p {
+  margin: 6px 0 0;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.integrationCardTop em {
+  grid-column: 1 / -1;
+  justify-self: start;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.integrationLogo {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 12px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.integrationDetails {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.integrationDetails div {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #FAFAFA;
+  padding: 12px;
+}
+
+.integrationDetails span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.integrationDetails strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: #111;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.integrationActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 18px;
+}
+
+.integrationActions a,
+.integrationActions button,
+.integrationPicker button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.integrationActions button,
+.integrationPicker button {
+  cursor: pointer;
+}
+
+.integrationActions button:disabled,
+.integrationPicker button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.integrationPropertyBox {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.integrationPicker {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #FAFAFA;
+  padding: 12px;
+}
+
+.integrationPicker select {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: #111;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  outline: none;
+}
+
+.integrationPicker select:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.18);
+}
+
+.integrationHelp {
+  margin: 0;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: #FAFAFA;
+  color: var(--secondary);
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.integrationError {
+  border: 1px solid rgba(220, 38, 38, 0.18);
+  border-radius: 10px;
+  background: #FBEAEA;
+  color: #DC2626;
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.integrationNote {
+  padding: 18px;
+}
+
+.integrationNote h3 {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.integrationNote p {
+  margin: 0;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .auditList {
@@ -2074,6 +2480,7 @@
   .sparkline polyline,
   .bigGauge circle:nth-of-type(2),
   .miniGauge path:nth-of-type(2),
+  .pageSpeedGauge circle:nth-of-type(2),
   .radar polygon:last-of-type,
   .radar circle,
   .areaBand,
@@ -2106,6 +2513,18 @@
   }
 }
 
+@media (max-width: 1320px) {
+  .pageSpeedGrid,
+  .integrationGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pageSpeedOverviewCard {
+    grid-column: span 2;
+    grid-row: auto;
+  }
+}
+
 @media (max-width: 1023px) {
   .heroGrid,
   .chartGrid,
@@ -2129,6 +2548,8 @@
   .priorityList,
   .checkColumns,
   .coreVitalsGrid,
+  .pageSpeedGrid,
+  .integrationGrid,
   .auditSummaryGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2172,10 +2593,36 @@
   .priorityList,
   .checkColumns,
   .coreVitalsGrid,
+  .pageSpeedGrid,
+  .pageSpeedMiniScores,
+  .integrationGrid,
   .auditSummaryGrid,
   .cta ul,
   .strategyPills {
     grid-template-columns: 1fr;
+  }
+
+  .pageSpeedOverviewCard,
+  .pageSpeedIssueCard {
+    grid-column: auto;
+  }
+
+  .pageSpeedScoreWrap {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .pageSpeedRows div,
+  .resourceRows div,
+  .pageSpeedIssueCard li {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .pageSpeedRows em,
+  .resourceRows i,
+  .pageSpeedIssueCard li em {
+    justify-self: start;
   }
 
   .auditHero {

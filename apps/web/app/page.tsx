@@ -97,7 +97,11 @@ export default function HomePage() {
     setIsGenerating(true);
     setProgress(8);
     try {
-      const report = await createReport({ brandName, websiteUrl, businessEmail });
+      const report = await createReport({
+        brandName,
+        websiteUrl,
+        businessEmail
+      });
       setProgress(100);
       window.setTimeout(() => router.push(`/report/${report.id}`), 650);
     } catch (err) {

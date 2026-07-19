@@ -33,7 +33,9 @@ const CHECKS: CheckDefinition[] = [
   [10, "Content & Accessibility", "No Key Data as Image-Only", 3.8, "High"],
   [11, "Content & Accessibility", "No Images Blocking Text", 2.72, "High"],
   [12, "Schema & Markup", "SVG <title>+<desc>", 0, "Low"],
-  [13, "Schema & Markup", "ImageObject Schema", 0, "Low"]
+  [13, "Schema & Markup", "ImageObject Schema", 0, "Low"],
+  [14, "Alt Text", "Placeholder Alt Text Detection", 2.17, "Medium"],
+  [15, "Image Format & Performance", "File Size <200KB", 3.26, "Medium"]
 ].map(([id, category, name, weight, severity]) => ({ id, category, name, weight, severity })) as CheckDefinition[];
 
 const CATEGORY_ORDER = [...new Set(CHECKS.map((check) => check.category))];
@@ -271,6 +273,13 @@ type ImageAltEvidence = {
   suggestedAlt?: string;
 };
 
+type ImageRef = {
+  pageUrl: string;
+  html: string;
+  $: cheerio.CheerioAPI;
+  el: Parameters<cheerio.CheerioAPI>[0];
+};
+
 function uniqueImageEvidence(items: ImageAltEvidence[], limit = 10) {
   const seen = new Set<string>();
   return items.filter((item) => {
@@ -279,6 +288,93 @@ function uniqueImageEvidence(items: ImageAltEvidence[], limit = 10) {
     seen.add(key);
     return true;
   }).slice(0, limit);
+}
+
+function placeholderAltIssue($: cheerio.CheerioAPI, el: Parameters<cheerio.CheerioAPI>[0]) {
+  const alt = ($(el).attr("alt") ?? "").replace(/\s+/g, " ").trim();
+  if (!alt) return "";
+  const lower = alt.toLowerCase();
+  const srcName = fileName(imageUrlFrom($, el)).replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ").trim().toLowerCase();
+  if (/^(?:image|img|photo|picture|graphic|screenshot|placeholder|sample image|stock photo|alt text|describe image|todo|tbd|n\/a|na|test)$/i.test(lower)) return "Generic placeholder alt text";
+  if (/^(?:image|photo|picture|screenshot|graphic)\s*(?:\d+|[-_ ]?\d+)?$/i.test(lower)) return "Numbered placeholder alt text";
+  if (/\b(?:lorem ipsum|placeholder|insert alt|add alt|alt text here|describe this image)\b/i.test(alt)) return "Authoring placeholder text";
+  if (srcName && lower === srcName && !isDescriptiveFileName(imageUrlFrom($, el))) return "Alt text mirrors a generic filename";
+  return "";
+}
+
+function parseByteSize(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^([\d.]+)\s*(b|bytes?|kb|kib|mb|mib)?$/i);
+  if (!match) return null;
+  const amount = Number.parseFloat(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  const unit = (match[2] ?? "b").toLowerCase();
+  if (unit === "mb" || unit === "mib") return Math.round(amount * 1024 * 1024);
+  if (unit === "kb" || unit === "kib") return Math.round(amount * 1024);
+  return Math.round(amount);
+}
+
+function imageSizeHint($: cheerio.CheerioAPI, el: Parameters<cheerio.CheerioAPI>[0]) {
+  const image = $(el);
+  for (const attr of ["data-size-bytes", "data-file-size-bytes", "data-bytes", "data-file-size", "data-size"]) {
+    const parsed = parseByteSize(image.attr(attr) ?? "");
+    if (parsed !== null) return parsed;
+  }
+  const src = imageUrlFrom($, el);
+  if (/^data:image\//i.test(src)) {
+    const payload = src.split(",", 2)[1] ?? "";
+    if (/;base64,/i.test(src)) return Math.round((payload.length * 3) / 4);
+    return decodeURIComponent(payload).length;
+  }
+  return null;
+}
+
+function sizeKey(pageUrl: string, $: cheerio.CheerioAPI, el: Parameters<cheerio.CheerioAPI>[0]) {
+  return absoluteUrl(new URL(pageUrl), imageUrlFrom($, el));
+}
+
+async function fetchImageContentLength(url: string) {
+  if (!/^https?:\/\//i.test(url)) return null;
+  try {
+    const response = await fetch(url, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: AbortSignal.timeout(1800),
+      headers: { "user-agent": "AIVisibilityAnalyzer/1.0" }
+    });
+    if (!response.ok || !/image\//i.test(response.headers.get("content-type") ?? "")) return null;
+    const bytes = Number(response.headers.get("content-length") ?? "");
+    return Number.isFinite(bytes) && bytes > 0 ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+async function collectImageByteSizes(refs: ImageRef[]) {
+  const sizes = new Map<string, number>();
+  const unresolved: string[] = [];
+  for (const ref of refs) {
+    const key = sizeKey(ref.pageUrl, ref.$, ref.el);
+    if (!key || sizes.has(key)) continue;
+    const hinted = imageSizeHint(ref.$, ref.el);
+    if (hinted !== null) sizes.set(key, hinted);
+    else unresolved.push(key);
+  }
+  const unique = [...new Set(unresolved)].slice(0, 40);
+  const fetched = await Promise.all(unique.map(async (url) => [url, await fetchImageContentLength(url)] as const));
+  fetched.forEach(([url, bytes]) => {
+    if (bytes !== null) sizes.set(url, bytes);
+  });
+  return sizes;
+}
+
+function oversizedImageEvidence(pageUrl: string, $: cheerio.CheerioAPI, el: Parameters<cheerio.CheerioAPI>[0], bytes: number) {
+  return {
+    ...imageAsset(pageUrl, $, el),
+    bytes,
+    kilobytes: Math.round(bytes / 1024)
+  };
 }
 
 async function quickImageCrawl(url: string) {
@@ -294,7 +390,7 @@ async function quickImageCrawl(url: string) {
   return Promise.race([crawl, timeout]);
 }
 
-function evaluateImageCheck(page: SiteCrawlResult["pages"][number], id: number) {
+function evaluateImageCheck(page: SiteCrawlResult["pages"][number], id: number, imageByteSizes = new Map<string, number>()) {
   const $ = page.$;
   const allImages = $("img").toArray();
   const meaningfulImages = allImages.filter((el) => !isLikelyDecorativeImage($, el));
@@ -387,16 +483,57 @@ function evaluateImageCheck(page: SiteCrawlResult["pages"][number], id: number) 
       const objects = parseJsonLd($).filter((record) => typesOf(record).includes("ImageObject")).length;
       return { applicable: images.length > 0, passed: images.length === 0 || objects > 0, issueCount: objects === 0 ? images.length : 0, evidence: { meaningfulContentImages: images.length, imageObjects: objects, affectedAssets: objects === 0 ? images.map((el) => imageAsset(page.finalUrl, $, el)) : [] } };
     }
+    case 14: {
+      const checked = meaningfulImages.filter((el) => ($(el).attr("alt") ?? "").trim());
+      const placeholder = checked
+        .map((el) => ({ el, issue: placeholderAltIssue($, el) }))
+        .filter((item) => item.issue);
+      return {
+        applicable: checked.length > 0,
+        passed: placeholder.length === 0,
+        issueCount: placeholder.length,
+        evidence: {
+          imagesWithAlt: checked.length,
+          placeholderAltCount: placeholder.length,
+          placeholderAlts: placeholder.map(({ el, issue }) => ({
+            pageUrl: page.finalUrl,
+            imageUrl: absoluteUrl(new URL(page.finalUrl), imageUrlFrom($, el)),
+            alt: ($(el).attr("alt") ?? "").trim(),
+            issue
+          })).slice(0, 10),
+          affectedAssets: placeholder.map(({ el }) => imageAsset(page.finalUrl, $, el))
+        }
+      };
+    }
+    case 15: {
+      const measurable = rasterImages.flatMap((el) => {
+        const bytes = imageByteSizes.get(sizeKey(page.finalUrl, $, el)) ?? imageSizeHint($, el);
+        return typeof bytes === "number" && Number.isFinite(bytes) ? [{ el, bytes }] : [];
+      });
+      const oversized = measurable.filter((item) => item.bytes > 200 * 1024);
+      return {
+        applicable: measurable.length > 0,
+        passed: oversized.length === 0,
+        issueCount: oversized.length,
+        evidence: {
+          measurableImages: measurable.length,
+          oversizedImages: oversized.length,
+          maxAllowedBytes: 200 * 1024,
+          maxAllowedKilobytes: 200,
+          affectedAssets: oversized.map(({ el, bytes }) => oversizedImageEvidence(page.finalUrl, $, el, bytes))
+        }
+      };
+    }
     default: return { passed: true };
   }
 }
 
-function aggregateImageCheck(crawl: SiteCrawlResult, id: number) {
-  const evidence = aggregatePages(crawl, (page) => evaluateImageCheck(page, id));
+function aggregateImageCheck(crawl: SiteCrawlResult, id: number, imageByteSizes = new Map<string, number>()) {
+  const evidence = aggregatePages(crawl, (page) => evaluateImageCheck(page, id, imageByteSizes));
   let failedInstances = 0;
   const allAffectedPageUrls = crawl.pages
     .filter((page) => {
-      const result = evaluateImageCheck(page, id);
+      const result = evaluateImageCheck(page, id, imageByteSizes);
       if (result.applicable !== false && !result.passed) {
         failedInstances += Math.max(1, result.issueCount ?? 1);
       }
@@ -404,7 +541,7 @@ function aggregateImageCheck(crawl: SiteCrawlResult, id: number) {
     })
     .map((page) => page.finalUrl);
   const assets = crawl.pages.flatMap((page) => {
-    const result = evaluateImageCheck(page, id);
+    const result = evaluateImageCheck(page, id, imageByteSizes);
     const sample = result.evidence && typeof result.evidence === "object"
       ? result.evidence as Record<string, unknown>
       : {};
@@ -451,6 +588,7 @@ export async function runImageSeoAudit(inputUrl: string, html?: string, siteCraw
   const meaningfulImgRefs = imgRefs.filter((ref) => !isLikelyDecorativeImage(ref.$, ref.el));
   const decorativeImageCount = allImgRefs.length - meaningfulImgRefs.length;
   const eligibleRasterRefs = pageContexts.flatMap((page) => eligibleRasterImages(page.$).map((el) => ({ ...page, el })));
+  const imageByteSizes = await collectImageByteSizes(eligibleRasterRefs);
   const imageUrls = eligibleRasterRefs.map((ref) => imageUrlFrom(ref.$, ref.el)).filter(Boolean);
   const imageCount = imgRefs.length;
   const pictureRefs = pageContexts.flatMap((page) => page.$("picture").toArray().map((el) => ({ ...page, el })));
@@ -601,13 +739,55 @@ export async function runImageSeoAudit(inputUrl: string, html?: string, siteCraw
     evidence: { meaningfulContentImages: meaningfulContentImageCount, imageObjectCount: imageObjects.length }
   });
 
+  const placeholderAltRefs = meaningfulImgRefs
+    .filter((ref) => (ref.$(ref.el).attr("alt") ?? "").trim())
+    .map((ref) => ({ ...ref, issue: placeholderAltIssue(ref.$, ref.el) }))
+    .filter((ref) => ref.issue);
+  const imagesWithAltCount = meaningfulImgRefs.filter((ref) => (ref.$(ref.el).attr("alt") ?? "").trim()).length;
+  add(14, {
+    passed: placeholderAltRefs.length === 0,
+    skipped: imagesWithAltCount === 0,
+    evidence: {
+      checkedPages: pageContexts.length,
+      imagesWithAlt: imagesWithAltCount,
+      placeholderAltCount: placeholderAltRefs.length,
+      placeholderAlts: placeholderAltRefs.map((ref) => ({
+        pageUrl: ref.pageUrl,
+        imageUrl: absoluteUrl(new URL(ref.pageUrl), imageUrlFrom(ref.$, ref.el)),
+        alt: (ref.$(ref.el).attr("alt") ?? "").trim(),
+        issue: ref.issue
+      })).slice(0, 10),
+      affectedAssets: placeholderAltRefs.map((ref) => imageAsset(ref.pageUrl, ref.$, ref.el))
+    }
+  });
+
+  const measurableImageRefs = eligibleRasterRefs.flatMap((ref) => {
+    const bytes = imageByteSizes.get(sizeKey(ref.pageUrl, ref.$, ref.el)) ?? imageSizeHint(ref.$, ref.el);
+    return typeof bytes === "number" && Number.isFinite(bytes) ? [{ ...ref, bytes }] : [];
+  });
+  const oversizedImageRefs = measurableImageRefs.filter((ref) => ref.bytes > 200 * 1024);
+  add(15, {
+    passed: oversizedImageRefs.length === 0,
+    skipped: measurableImageRefs.length === 0,
+    evidence: {
+      checkedPages: pageContexts.length,
+      eligibleImages: eligibleRasterRefs.length,
+      measurableImages: measurableImageRefs.length,
+      oversizedImages: oversizedImageRefs.length,
+      maxAllowedBytes: 200 * 1024,
+      maxAllowedKilobytes: 200,
+      note: measurableImageRefs.length === 0 ? "Image byte sizes were not available from markup hints or response headers." : "Images over 200KB are flagged.",
+      affectedAssets: oversizedImageRefs.map((ref) => oversizedImageEvidence(ref.pageUrl, ref.$, ref.el, ref.bytes))
+    }
+  });
+
   const crawlForAggregation = crawled?.pages.length ? crawled : null;
   const siteWideResults = crawlForAggregation ? results.map((check) => {
     if ([3, 9, 11].includes(check.id)) {
       const evidence = { scope: "homepage-only", pagesCrawled: crawlForAggregation.pages.length, pagesChecked: 1, pagesPassed: check.passed ? 1 : 0, pagesFailed: check.passed ? 0 : 1, passRate: check.passed ? 100 : 0, affectedPages: [], sampleEvidence: [check.evidence], reason: check.evidence.reason };
       return { ...check, evidence, recommendation: imageSeoRecommendation(check.name, check.severity, evidence) };
     }
-    const evidence = aggregateImageCheck(crawlForAggregation, check.id);
+    const evidence = aggregateImageCheck(crawlForAggregation, check.id, imageByteSizes);
     const outcome = outcomeForEvidence(evidence);
     const advisory = ADVISORY_CHECK_IDS.has(check.id);
     const severity = advisory ? check.severity : boundedSeverity(check.severity, outcome.severity);

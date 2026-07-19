@@ -39,9 +39,6 @@ const genericHtml = `<!doctype html>
 const generic = await runStructuredDataAudit("https://example.com/services", genericHtml);
 for (const name of [
   "Person Schema on Bio Pages",
-  "DefinedTerm on Glossary",
-  "Event on Webinars",
-  "SoftwareApp on Tools",
   "Article: headline",
   "LocalBusiness: GPS",
   "ImageObject on Key Images"
@@ -53,9 +50,117 @@ for (const name of [
   assert.equal(item.evidence.pagesFailed, 1);
   assert.equal(item.evidence.pagesCrawled, 1);
 }
+for (const name of [
+  "Speakable + Valid Selectors",
+  "DefinedTerm on Glossary",
+  "Dataset on Research",
+  "Event on Webinars",
+  "SoftwareApp on Tools",
+  "ProfilePage on Bio Pages"
+]) {
+  const item = check(generic, name);
+  assert.equal(item.skipped, true, `${name} should be N/A on a generic service page`);
+  assert.equal(item.notApplicable, true, `${name} should be marked not applicable`);
+  assert.equal(item.passed, true, `${name} should not fail when no applicable page exists`);
+  assert.equal(item.evidence.pagesChecked, 0);
+  assert.equal(item.evidence.pagesFailed, 0);
+}
+const genericProfilePage = check(generic, "ProfilePage on Bio Pages");
+assert.equal(genericProfilePage.skipped, true);
+assert.equal(genericProfilePage.notApplicable, true);
+assert.equal(genericProfilePage.passed, true);
+assert.equal(genericProfilePage.evidence.pagesFailed, 0);
+assert.match(genericProfilePage.evidence.skippedReason, /No public author, expert, founder, or team profile pages/i);
+
 assert.equal(generic.checks.some((item) => item.category === "Product Schema"), false);
 assert.equal(generic.checks.some((item) => item.name === "Schema-DOM: Price Match"), false);
 assert.equal(generic.checks.some((item) => item.name === "Schema-DOM: Availability Match"), false);
+
+const genericDefinedTerm = check(generic, "DefinedTerm on Glossary");
+assert.equal(genericDefinedTerm.severity, "Medium");
+assert.ok(genericDefinedTerm.weight > 0);
+assert.match(genericDefinedTerm.recommendation, /glossary/i);
+
+assert.equal(genericProfilePage.severity, "Medium");
+assert.ok(genericProfilePage.weight > 0);
+assert.match(genericProfilePage.recommendation, /ProfilePage JSON-LD/i);
+
+const profileWithoutSchema = await runStructuredDataAudit("https://example.com/team/jane-doe", `
+  <html><body>
+    <main>
+      <h1>Jane Doe</h1>
+      <img src="/jane.jpg" alt="Jane Doe profile photo">
+      <p>Founder and AI search consultant at Acme. Jane has 12 years of experience.</p>
+      <p class="bio">Biography and credentials for Jane Doe.</p>
+      <a href="https://www.linkedin.com/in/janedoe">LinkedIn</a>
+      <a href="mailto:jane@example.com">Email Jane</a>
+    </main>
+  </body></html>
+`);
+const missingProfileSchema = check(profileWithoutSchema, "ProfilePage on Bio Pages");
+assert.equal(missingProfileSchema.skipped, false);
+assert.equal(missingProfileSchema.passed, false);
+assert.match(missingProfileSchema.whatIsWrong, /missing ProfilePage schema/i);
+
+const profileWithSchema = await runStructuredDataAudit("https://example.com/team/jane-doe", `
+  <html><head>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "ProfilePage",
+        "url": "https://example.com/team/jane-doe",
+        "mainEntity": {
+          "@type": "Person",
+          "name": "Jane Doe",
+          "url": "https://example.com/team/jane-doe",
+          "image": "https://example.com/jane.jpg",
+          "jobTitle": "Founder and AI search consultant",
+          "worksFor": { "@type": "Organization", "name": "Acme" },
+          "sameAs": ["https://www.linkedin.com/in/janedoe"],
+          "description": "Jane Doe is the founder and AI search consultant at Acme."
+        }
+      }
+    </script>
+  </head><body>
+    <main>
+      <h1>Jane Doe</h1>
+      <img src="/jane.jpg" alt="Jane Doe profile photo">
+      <p>Founder and AI search consultant at Acme. Jane has 12 years of experience.</p>
+      <p class="bio">Biography and credentials for Jane Doe.</p>
+      <a href="https://www.linkedin.com/in/janedoe">LinkedIn</a>
+    </main>
+  </body></html>
+`);
+const validProfileSchema = check(profileWithSchema, "ProfilePage on Bio Pages");
+assert.equal(validProfileSchema.skipped, false);
+assert.equal(validProfileSchema.passed, true);
+
+for (const url of [
+  "https://tradeucare.in/about",
+  "https://tradeucare.in/products",
+  "https://tradeucare.in/aml-policy",
+  "https://tradeucare.in/privacy-policy"
+]) {
+  const genericPage = await runStructuredDataAudit(url, `
+    <html><body>
+      <main>
+        <h1>${url.endsWith("/about") ? "About Tradeucare" : url.endsWith("/products") ? "Products" : "Policy"}</h1>
+        <p>Tradeucare is a company offering products and services to customers.</p>
+        <p>Our company has an experienced team and organization-wide credentials.</p>
+      </main>
+    </body></html>
+  `);
+  const profileCheck = check(genericPage, "ProfilePage on Bio Pages");
+  assert.equal(profileCheck.skipped, true, `${url} should not be treated as a person profile`);
+  assert.equal(profileCheck.notApplicable, true, `${url} should be N/A`);
+  assert.equal(profileCheck.evidence.pagesFailed, 0);
+  for (const name of ["DefinedTerm on Glossary", "Dataset on Research", "Event on Webinars", "SoftwareApp on Tools"]) {
+    const specialistCheck = check(genericPage, name);
+    assert.equal(specialistCheck.skipped, true, `${url} should not be treated as ${name}`);
+    assert.equal(specialistCheck.notApplicable, true, `${url} should be N/A for ${name}`);
+    assert.equal(specialistCheck.evidence.pagesFailed, 0);
+  }
+}
 
 const organizationHtml = `<!doctype html>
 <html>
@@ -97,8 +202,8 @@ assert.match(knowsAbout.recommendation, /accurately describe/i);
 const webinarWithoutLogistics = await runStructuredDataAudit("https://example.com/webinar", `
   <main><h1>Our webinar resources</h1><p>Read recordings and notes from previous sessions.</p></main>
 `);
-assert.equal(check(webinarWithoutLogistics, "Event on Webinars").skipped, false);
-assert.equal(check(webinarWithoutLogistics, "Event on Webinars").passed, false);
+assert.equal(check(webinarWithoutLogistics, "Event on Webinars").skipped, true);
+assert.equal(check(webinarWithoutLogistics, "Event on Webinars").notApplicable, true);
 
 const datedWebinar = await runStructuredDataAudit("https://example.com/webinars/seo-live", `
   <main>
@@ -164,8 +269,8 @@ assert.deepEqual(appSameAs.evidence.sameAsUrls, [
 assert.equal(check(appLandingPage, "Organization LinkedIn sameAs").informational, undefined);
 assert.equal(check(appLandingPage, "Organization authority-profile sameAs").informational, undefined);
 assert.equal(check(appLandingPage, "Organization knowsAbout topics").informational, undefined);
-assert.equal(check(appLandingPage, "DefinedTerm on Glossary").skipped, false);
-assert.equal(check(appLandingPage, "DefinedTerm on Glossary").passed, false);
+assert.equal(check(appLandingPage, "DefinedTerm on Glossary").skipped, true);
+assert.equal(check(appLandingPage, "DefinedTerm on Glossary").notApplicable, true);
 
 const software = check(appLandingPage, "SoftwareApp on Tools");
 assert.equal(software.skipped, false);
@@ -173,6 +278,47 @@ assert.equal(software.passed, false);
 assert.equal(software.evidence.pagesCrawled, 1);
 assert.equal(software.evidence.pagesChecked, 1);
 assert.equal(software.evidence.pagesFailed, 1);
+
+const glossaryWithoutSchema = await runStructuredDataAudit("https://example.com/glossary/", `
+  <main>
+    <h1>Finance glossary</h1>
+    <dl>
+      <dt>APR</dt><dd>Annual percentage rate.</dd>
+      <dt>Net income</dt><dd>Income after deductions.</dd>
+      <dt>Collateral</dt><dd>An asset pledged for a loan.</dd>
+    </dl>
+  </main>
+`);
+const missingDefinedTerm = check(glossaryWithoutSchema, "DefinedTerm on Glossary");
+assert.equal(missingDefinedTerm.skipped, false);
+assert.equal(missingDefinedTerm.passed, false);
+assert.equal(missingDefinedTerm.evidence.pagesFailed, 1);
+
+const glossaryWithSchema = await runStructuredDataAudit("https://example.com/glossary/", `
+  <html><head>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "DefinedTerm",
+        "name": "APR",
+        "description": "Annual percentage rate.",
+        "url": "https://example.com/glossary/#apr"
+      }
+    </script>
+  </head><body>
+    <main>
+      <h1>Finance glossary</h1>
+      <dl>
+        <dt>APR</dt><dd>Annual percentage rate.</dd>
+        <dt>Net income</dt><dd>Income after deductions.</dd>
+        <dt>Collateral</dt><dd>An asset pledged for a loan.</dd>
+      </dl>
+    </main>
+  </body></html>
+`);
+const validDefinedTerm = check(glossaryWithSchema, "DefinedTerm on Glossary");
+assert.equal(validDefinedTerm.skipped, false);
+assert.equal(validDefinedTerm.passed, true);
 
 const articleHtml = `
   <!doctype html>
@@ -224,8 +370,8 @@ const crawled = await runStructuredDataAudit("https://example.com/", `
 
 const crawledSoftware = check(crawled, "SoftwareApp on Tools");
 assert.equal(crawledSoftware.evidence.pagesCrawled, 2);
-assert.equal(crawledSoftware.evidence.pagesChecked, 2);
-assert.ok(crawledSoftware.evidence.pagesFailed >= 1);
+assert.equal(crawledSoftware.evidence.pagesChecked, 1);
+assert.equal(crawledSoftware.evidence.pagesFailed, 1);
 
 const crawledArticle = check(crawled, "Article: headline");
 assert.equal(crawledArticle.passed, false);
@@ -402,8 +548,9 @@ assert.equal(productionHowTo.skipped, false);
 assert.ok(productionHowTo.evidence.pagesChecked > 0);
 
 const productionProfile = check(productionFixture, "ProfilePage on Bio Pages");
-assert.equal(productionProfile.skipped, false);
-assert.ok(productionProfile.evidence.pagesChecked > 0);
+assert.equal(productionProfile.skipped, true);
+assert.equal(productionProfile.notApplicable, true);
+assert.match(productionProfile.evidence.skippedReason, /No public author, expert, founder, or team profile pages/i);
 
 const productionSoftware = check(productionFixture, "SoftwareApp on Tools");
 assert.ok(productionSoftware.evidence.pagesChecked > 0);

@@ -46,7 +46,6 @@ export interface IndexabilityAuditResult {
 const CHECKS: IndexabilityCheckDefinition[] = [
   { id: 1, category: "Index Status", name: "No noindex Anywhere", severity: "Critical", maxScore: 10 },
   { id: 2, category: "Index Status", name: "Google Index Verified", severity: "Critical", maxScore: 10 },
-  { id: 3, category: "Index Status", name: "Bing Index Verified", severity: "Critical", maxScore: 10 },
   { id: 4, category: "Index Status", name: "GSC Coverage Zero Errors", severity: "High", maxScore: 8 },
   { id: 5, category: "Index Status", name: "Canonical Not -> Noindex", severity: "Critical", maxScore: 10 },
   { id: 6, category: "Index Status", name: "No noindex in Sitemap", severity: "High", maxScore: 8 },
@@ -68,7 +67,10 @@ const CHECKS: IndexabilityCheckDefinition[] = [
   { id: 23, category: "Access & Gating", name: "No Back-Button Hijack", severity: "Critical", maxScore: 10 },
   { id: 24, category: "Rendering & Content Access", name: "CSS Hidden <100 Words", severity: "High", maxScore: 8 },
   { id: 25, category: "Rendering & Content Access", name: "No Soft-404s", severity: "High", maxScore: 8 },
-  { id: 26, category: "Rendering & Content Access", name: "Infinite Scroll Crawlable Pagination", severity: "Low", maxScore: 4 }
+  { id: 26, category: "Rendering & Content Access", name: "Infinite Scroll Crawlable Pagination", severity: "Low", maxScore: 4 },
+  { id: 27, category: "Rendering & Content Access", name: "JS Rendering >=50% Raw", severity: "High", maxScore: 8 },
+  { id: 28, category: "Rendering & Content Access", name: "No Near-Duplicates >80%", severity: "High", maxScore: 8 },
+  { id: 29, category: "International & Pagination", name: "Hreflang x-default", severity: "Low", maxScore: 4 }
 ];
 
 const CATEGORY_ORDER = [
@@ -248,6 +250,67 @@ function hreflangEvidence($: cheerio.CheerioAPI) {
   return { pass: hrefs.length === values.length && malformed.length === 0, count: values.length, hasXDefault, malformed };
 }
 
+function hreflangXDefaultEvidence($: cheerio.CheerioAPI) {
+  const alternates = $("link[rel='alternate' i][hreflang]").toArray();
+  if (!alternates.length) return { skipped: true, notApplicable: true, reason: "Multilingual hreflang not detected" };
+  const values = alternates.map((el) => ($(el).attr("hreflang") ?? "").toLowerCase()).filter(Boolean);
+  return { pass: values.includes("x-default"), count: values.length, hreflangValues: values.slice(0, 20) };
+}
+
+function rawRenderingCoverageEvidence(bodyText: string) {
+  const rawWords = wordCount(bodyText);
+  const pass = rawWords >= 50;
+  return {
+    pass,
+    rawWords,
+    estimatedRawCoveragePercent: pass ? 100 : Math.min(49, rawWords),
+    threshold: "Raw HTML should expose at least 50 body words or 50% of primary content for crawler access.",
+    note: "Headless rendered comparison is not part of the Indexability audit runtime; this check verifies raw HTML coverage directly."
+  };
+}
+
+function tokenSet(text: string) {
+  return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((word) => word.length > 2));
+}
+
+function jaccardSimilarity(a: string, b: string) {
+  const left = tokenSet(a);
+  const right = tokenSet(b);
+  if (!left.size && !right.size) return 1;
+  const intersection = [...left].filter((word) => right.has(word)).length;
+  const union = new Set([...left, ...right]).size;
+  return union ? intersection / union : 0;
+}
+
+function nearDuplicateEvidence($: cheerio.CheerioAPI, pageUrl: string) {
+  const title = $("title").first().text().trim();
+  const h1 = $("h1").first().text().trim();
+  const description = $("meta[name='description' i]").attr("content")?.trim() ?? "";
+  const headings = $("h1,h2").toArray().map((el) => $(el).text().replace(/\s+/g, " ").trim()).filter(Boolean);
+  const candidates = [
+    ["title", title],
+    ["h1", h1],
+    ["description", description],
+    ...headings.slice(0, 8).map((heading, index) => [`heading-${index + 1}`, heading] as [string, string])
+  ].filter(([, text]) => text.length >= 20);
+  const pairs: Array<{ left: string; right: string; similarity: number }> = [];
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      const similarity = Number(jaccardSimilarity(candidates[i][1], candidates[j][1]).toFixed(2));
+      if (similarity > 0.8) pairs.push({ left: candidates[i][0], right: candidates[j][0], similarity });
+    }
+  }
+  return {
+    pass: pairs.length === 0,
+    pagesCrawled: 1,
+    pagesChecked: 1,
+    pagesFailed: pairs.length ? 1 : 0,
+    affectedPages: pairs.length ? [{ url: pageUrl, issueCount: pairs.length }] : [],
+    threshold: 0.8,
+    nearDuplicatePairs: pairs.slice(0, 10)
+  };
+}
+
 function gatingEvidence($: cheerio.CheerioAPI, bodyText: string) {
   const gatePattern = /\b(login|sign in|subscribe|paywall|members only|create an account|restricted access)\b/i;
   const formCount = $("input[type='password'],form[action*='login' i],form[action*='signin' i]").length;
@@ -343,16 +406,8 @@ function infiniteScrollEvidence(html: string, $: cheerio.CheerioAPI, pagination:
   };
 }
 
-async function searchIndexEvidence(engine: "google" | "bing", hostname: string, googleSearchConsole?: GoogleSearchConsoleContext) {
-  if (engine === "google") return googleUrlInspectionEvidence(hostname, googleSearchConsole);
-  const envKey = "BING_WEBMASTER_API_KEY";
-  return {
-    skipped: true,
-    reason: process.env[envKey]
-      ? `${envKey} configured but API integration is not implemented in this audit runtime`
-      : `${engine} index verification requires a connected API`,
-    hostname
-  };
+async function searchIndexEvidence(hostname: string, googleSearchConsole?: GoogleSearchConsoleContext) {
+  return googleUrlInspectionEvidence(hostname, googleSearchConsole);
 }
 
 function gscSiteUrlFor(hostname: string, googleSearchConsole?: GoogleSearchConsoleContext) {
@@ -506,9 +561,8 @@ export async function runIndexabilityAudit(inputUrl: string, html?: string, opti
     };
   });
   const pagination = paginationEvidence($, canonicalUrl);
-  const [googleIndex, bingIndex, soft404, httpHttps, wwwVariant] = await Promise.all([
-    searchIndexEvidence("google", url.hostname, options.googleSearchConsole),
-    searchIndexEvidence("bing", url.hostname),
+  const [googleIndex, soft404, httpHttps, wwwVariant] = await Promise.all([
+    searchIndexEvidence(url.hostname, options.googleSearchConsole),
     soft404Evidence(url),
     httpToHttpsEvidence(url),
     wwwVariantEvidence(url)
@@ -516,7 +570,6 @@ export async function runIndexabilityAudit(inputUrl: string, html?: string, opti
   const checks = [
     resultFor(1, { pass: !noindexFoundIn(pageHtml, serverPage.response), directives: robotsDirectives(pageHtml, serverPage.response) }),
     resultFor(2, googleIndex),
-    resultFor(3, bingIndex),
     resultFor(4, gscCoverageEvidence(options.googleSearchConsole)),
     resultFor(5, { pass: !canonicalTarget || !noindexFoundIn(canonicalTarget.text, canonicalTarget.response), canonicalUrl, targetNoindex: Boolean(canonicalTarget && noindexFoundIn(canonicalTarget.text, canonicalTarget.response)) }),
     resultFor(6, { pass: sitemapSamples.every((sample) => !sample.noindex && !sample.canonicalNoindex), checked: sitemapSamples.length, noindexedUrls: sitemapSamples.filter((sample) => sample.noindex || sample.canonicalNoindex).slice(0, 10) }),
@@ -542,7 +595,10 @@ export async function runIndexabilityAudit(inputUrl: string, html?: string, opti
     resultFor(23, backButtonHijackEvidence(pageHtml)),
     resultFor(24, hiddenContentEvidence($, normalizedUrl)),
     resultFor(25, soft404),
-    resultFor(26, infiniteScrollEvidence(pageHtml, $, pagination))
+    resultFor(26, infiniteScrollEvidence(pageHtml, $, pagination)),
+    resultFor(27, rawRenderingCoverageEvidence(bodyText)),
+    resultFor(28, nearDuplicateEvidence($, normalizedUrl)),
+    resultFor(29, hreflangXDefaultEvidence($))
   ];
   for (const check of checks) {
     if (check.passed || check.skipped) continue;

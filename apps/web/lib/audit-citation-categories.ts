@@ -12,11 +12,12 @@ export const CHATGPT_CITATION_CATEGORIES: string[] = [
 
 export const CHATGPT_CITATION_CHECK_IDS = [
   38, 39, 40, 41, 42, 49, 50, 52, 54, 55, 65, 66,
-  104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115
+  106, 108, 109, 110, 111, 112, 113, 114, 115
 ] as const;
 
 export const GEMINI_CITATION_CATEGORIES: string[] = [
   "Gemini Crawlability",
+  "Content Structure",
   "Local & E-Commerce",
   "Schema & Technical",
   "Media & Visuals",
@@ -24,4 +25,4 @@ export const GEMINI_CITATION_CATEGORIES: string[] = [
   "AI Discovery Files"
 ] as string[];
 
-export const GEMINI_CITATION_CHECK_IDS = [67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78] as const;
+export const GEMINI_CITATION_CHECK_IDS = [67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 116, 117, 118, 119] as const;

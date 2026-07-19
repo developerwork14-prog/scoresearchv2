@@ -464,6 +464,9 @@ function technicalCategorySummaries(audit: TechnicalAuditResult): TechnicalCateg
     "International SEO",
     "Content Basics",
     "Trust Signals",
+    "Entity Recognition",
+    "Entity Description Consistency",
+    "Entity Attribute Consistency",
     "Security & Spam",
     "AI Crawl Readiness",
     "AI Accessibility & Discoverability"

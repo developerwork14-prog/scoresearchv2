@@ -35,7 +35,7 @@ const html = `<!doctype html>
           <img src="/Component-1-6.png" width="800" height="500">
           <figcaption>Borrower completing a personal loan application on a mobile phone</figcaption>
         </figure>
-        <img src="/loan-documents.jpg" width="800" height="500" alt="Documents required for a personal loan">
+        <img src="/loan-documents.jpg" width="800" height="500" data-file-size="250KB" alt="Image">
         <svg class="menu-icon" width="24" height="24"><path d="M0 0h10v10z"></path></svg>
         <svg class="loan-process-diagram" width="600" height="300"><path d="M0 0h10v10z"></path></svg>
       </main>
@@ -61,9 +61,9 @@ const crawl = {
 const audit = await runImageSeoAudit("https://example.com/guide", html, crawl);
 const check = (name) => audit.checks.find((item) => item.name === name);
 
-assert.equal(audit.checks.length, 13);
+assert.equal(audit.checks.length, 15);
 assert.ok(audit.checks.every((item) => item.recommendation));
-assert.equal(new Set(audit.checks.map((item) => item.recommendation.howToFix)).size, 13);
+assert.equal(new Set(audit.checks.map((item) => item.recommendation.howToFix)).size, 15);
 assert.ok(audit.checks.every((item) => item.recommendation.whatIsWrong));
 assert.ok(audit.checks.every((item) => item.recommendation.developerNotes));
 assert.ok(audit.checks.every((item) => item.recommendation.detectionConfidence));
@@ -116,6 +116,24 @@ assert.ok(filenames.evidence.affectedPages[0].sampleEvidence.nonDescriptive.ever
 assert.doesNotMatch(filenames.recommendation.howToFix, /alt text/i);
 assert.ok(filenames.recommendation.priorityScore >= 10 && filenames.recommendation.priorityScore <= 40);
 assert.equal(filenames.recommendation.overallAiVisibilityImpact.level, "Low");
+
+const placeholderAlt = check("Placeholder Alt Text Detection");
+assert.equal(placeholderAlt.severity, "Medium");
+assert.equal(placeholderAlt.evidence.affectedPages[0].sampleEvidence.placeholderAltCount, 1);
+assert.match(placeholderAlt.recommendation.whatIsWrong, /placeholder or generic alt text/);
+assert.deepEqual(placeholderAlt.recommendation.affectedAssets, ["loan-documents.jpg"]);
+assert.ok(placeholderAlt.recommendation.rootCause.includes("CMS or migration workflow allows generic alt placeholder values"));
+assert.equal(placeholderAlt.recommendation.overallAiVisibilityImpact.level, "Moderate");
+assert.ok(placeholderAlt.recommendation.priorityScore >= 55 && placeholderAlt.recommendation.priorityScore <= 75);
+
+const fileSize = check("File Size <200KB");
+assert.equal(fileSize.severity, "Medium");
+assert.equal(fileSize.evidence.affectedPages[0].sampleEvidence.measurableImages, 1);
+assert.equal(fileSize.evidence.affectedPages[0].sampleEvidence.oversizedImages, 1);
+assert.match(fileSize.recommendation.whatIsWrong, /exceed 200KB/);
+assert.deepEqual(fileSize.recommendation.affectedAssets, ["loan-documents.jpg"]);
+assert.equal(fileSize.recommendation.overallAiVisibilityImpact.level, "Low");
+assert.equal(fileSize.recommendation.estimatedFixScope.level, "Infrastructure-level fix");
 
 const svg = check("SVG <title>+<desc>");
 assert.equal(svg.evidence.affectedPages[0].sampleEvidence.svgs, 1);

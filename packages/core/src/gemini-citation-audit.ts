@@ -1,5 +1,6 @@
 export const GEMINI_CITATION_CATEGORIES = [
   "Gemini Crawlability",
+  "Content Structure",
   "Local & E-Commerce",
   "Schema & Technical",
   "Media & Visuals",
@@ -8,7 +9,7 @@ export const GEMINI_CITATION_CATEGORIES = [
 ] as const;
 
 export const GEMINI_CITATION_CATEGORY_SET = new Set<string>(GEMINI_CITATION_CATEGORIES);
-export const GEMINI_CITATION_CHECK_IDS = new Set<number>([67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78]);
+export const GEMINI_CITATION_CHECK_IDS = new Set<number>([67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 116, 117, 118, 119]);
 
 export const GEMINI_CITATION_RECOMMENDATIONS: Record<number, string> = {
   67: "Allow Google-Extended in robots.txt when Gemini citation visibility is desired.",
@@ -22,7 +23,11 @@ export const GEMINI_CITATION_RECOMMENDATIONS: Record<number, string> = {
   75: "Replace stock imagery with original images where trust and citation quality matter.",
   76: "Add meaningful alt text to images that communicate important page content.",
   77: "Add VideoObject schema for embedded videos on key pages.",
-  78: "Publish crawlable transcript or caption text that aligns with the visible page content."
+  78: "Publish crawlable transcript or caption text that aligns with the visible page content.",
+  116: "Connect Merchant Center or feed data and keep feed, schema, and visible product prices aligned.",
+  117: "Keep key facts visible in the initial page content instead of hiding them in accordions or tabs.",
+  118: "Connect verified Google Business Profile data to compare schema coordinates with the GBP pin.",
+  119: "Keep business descriptions consistent across GBP, schema, homepage, and key local pages."
 };
 
 export function isGeminiCitationCategory(categoryName: string) {
