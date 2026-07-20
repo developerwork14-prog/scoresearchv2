@@ -1,8 +1,8 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Bot, FileText, MapPin, Search, Video } from "lucide-react";
+import { Activity, AlertTriangle, Bot, CheckCircle2, Clock3, Database, FileText, MapPin, RefreshCw, Search, ServerCrash, ShieldCheck, Video } from "lucide-react";
 import type { StructuredAiVisibilityReport } from "@aiva/core";
 import { API_BASE, getReport } from "@/lib/api";
 import type { ExternalProperty, IntegrationProvider, PublicIntegrationConnection } from "@/lib/server/integrations/types";
@@ -28,7 +28,7 @@ type CategoryLike = {
   skippedChecks?: number;
 };
 type AuditTabId = "technical" | "pageSpeed" | "crawlability" | "structuredData" | "onPageSeo" | "imageSeo" | "eeat" | "trustSignals" | "entitySeo" | "geo" | "citation" | "gemini" | "indexability";
-type ActiveSectionId = "overview" | "integrations" | AuditTabId;
+type ActiveSectionId = "overview" | "integrations" | "serverStatus" | AuditTabId;
 type TabInfo = { label: string; categories: CategoryLike[]; checks: CheckLike[]; score: number; issues: number; available: boolean; checkedAt?: string };
 type IssueImpactCounts = { high: number; medium: number; low: number };
 type IssueTrendPoint = IssueImpactCounts & { label: string };
@@ -85,6 +85,19 @@ type GeoIssueCategory = CategoryLike & {
   skippedCheckDetails?: { name?: string; reason?: string }[];
 };
 type AiPlatform = "chatgpt" | "gemini" | "geo" | "overall";
+type HealthTone = "good" | "warn" | "bad" | "muted";
+type HealthResponse = {
+  ok: boolean;
+  message?: string;
+  storage?: {
+    mode?: string;
+    mongoConfigured?: boolean;
+    database?: string;
+    uri?: string;
+    lastError?: string | null;
+  };
+  integrations?: Record<string, boolean>;
+};
 
 const strategyItems = [
   { label: "SEO", icon: Search },
@@ -2033,6 +2046,192 @@ function AuditDetailPanel({ tab }: { tab: TabInfo }) {
   );
 }
 
+function ServerStatusPanel() {
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+  const [latency, setLatency] = useState<number | null>(null);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+
+  const load = useCallback(async () => {
+    setChecking(true);
+    setError("");
+    const started = performance.now();
+    try {
+      const response = await fetch("/api/health", { cache: "no-store" });
+      const elapsed = Math.round(performance.now() - started);
+      const data = await response.json().catch(() => ({})) as Partial<HealthResponse> & { message?: string };
+      if (!response.ok) throw new Error(data.message ?? `Health check failed with HTTP ${response.status}.`);
+      setLatency(elapsed);
+      setHealth(data as HealthResponse);
+      setLastChecked(new Date());
+    } catch (err) {
+      setLatency(null);
+      setHealth({ ok: false, message: err instanceof Error ? err.message : "Health check failed." });
+      setError(err instanceof Error ? err.message : "Health check failed.");
+      setLastChecked(new Date());
+    } finally {
+      setLoading(false);
+      setChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, 30000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  const monitors = useMemo(() => reportHealthMonitors(health), [health]);
+  const downCount = monitors.filter((monitor) => monitor.status === "Down").length;
+  const attentionCount = monitors.filter((monitor) => monitor.status === "Attention" || monitor.status === "Not configured").length;
+  const tone: HealthTone = downCount ? "bad" : attentionCount ? "warn" : "good";
+  const statusLabel = downCount ? "Server down" : attentionCount ? "Needs attention" : "All systems operational";
+
+  return (
+    <section className={styles.statusPanel}>
+      <div className={styles.auditHero}>
+        <div>
+          <p>Live operations</p>
+          <h2>Server Down Monitor</h2>
+          <span>Health checks for the report app, storage, and AI visibility integrations run every 30 seconds.</span>
+        </div>
+        <button type="button" className={styles.secondary} onClick={load} disabled={checking}>
+          <RefreshCw aria-hidden="true" />
+          {checking ? "Checking..." : "Refresh"}
+        </button>
+      </div>
+
+      <article className={`${styles.card} ${styles.statusHero} ${styles[`statusHero_${tone}`]}`}>
+        <span className={styles.statusHeroIcon}>
+          {tone === "bad" ? <ServerCrash aria-hidden="true" /> : tone === "warn" ? <AlertTriangle aria-hidden="true" /> : <ShieldCheck aria-hidden="true" />}
+        </span>
+        <div>
+          <span className={`${styles.statusBadge} ${styles[`statusBadge_${tone}`]}`}>{statusLabel}</span>
+          <h3>{health?.ok === false ? health.message ?? "Health endpoint is unavailable." : "Production services are responding."}</h3>
+          <p>{error || "If the health endpoint fails, this panel immediately marks the server as down and lists the affected dependency."}</p>
+        </div>
+      </article>
+
+      <div className={styles.statusMetricGrid}>
+        <article className={styles.card}><span>Response</span><strong>{latency === null ? "-" : `${latency} ms`}</strong><p>Latest health check latency.</p></article>
+        <article className={styles.card}><span>Checks</span><strong>{monitors.length || "-"}</strong><p>Tracked services and dependencies.</p></article>
+        <article className={styles.card}><span>Down</span><strong className={downCount ? styles.statusTextBad : styles.statusTextGood}>{downCount}</strong><p>Active outage signals.</p></article>
+        <article className={styles.card}><span>Updated</span><strong>{lastChecked ? lastChecked.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "-"}</strong><p>Last automatic refresh.</p></article>
+      </div>
+
+      <div className={styles.sectionHead}>
+        <h2>Live monitors</h2>
+        <p>{loading ? "Loading checks" : `${monitors.length} checks · ${downCount} down · ${attentionCount} attention`}</p>
+      </div>
+
+      <div className={styles.statusGrid}>
+        <div className={styles.statusMonitorList}>
+          {loading ? [1, 2, 3, 4].map((item) => <article key={item} className={`${styles.card} ${styles.statusSkeleton}`} />) : monitors.map((monitor) => {
+            const Icon = monitor.icon;
+            return (
+              <article className={`${styles.card} ${styles.statusMonitor}`} key={monitor.name}>
+                <span className={`${styles.statusMonitorIcon} ${styles[`statusIcon_${monitor.tone}`]}`}><Icon aria-hidden="true" /></span>
+                <div>
+                  <h3>{monitor.name}</h3>
+                  <p>{monitor.description}</p>
+                  <small>{monitor.detail}</small>
+                </div>
+                <b className={`${styles.statusBadge} ${styles[`statusBadge_${monitor.tone}`]}`}>{monitor.status}</b>
+              </article>
+            );
+          })}
+        </div>
+
+        <aside className={styles.statusSideStack}>
+          <article className={`${styles.card} ${styles.statusSideCard}`}>
+            <div className={styles.cardTitle}><h2>Incident Timeline</h2><Clock3 aria-hidden="true" /></div>
+            <div className={styles.statusIncidentList}>
+              {downCount ? (
+                monitors.filter((monitor) => monitor.status === "Down").map((monitor) => <StatusIncident key={monitor.name} tone="bad" title={`${monitor.name} is down`} detail={monitor.detail} />)
+              ) : attentionCount ? (
+                monitors.filter((monitor) => monitor.status !== "Operational").map((monitor) => <StatusIncident key={monitor.name} tone={monitor.tone} title={`${monitor.name} needs attention`} detail={monitor.detail} />)
+              ) : (
+                <StatusIncident tone="good" title="No active incidents" detail="All live checks are currently passing." />
+              )}
+            </div>
+          </article>
+
+          <article className={`${styles.card} ${styles.statusSideCard}`}>
+            <div className={styles.cardTitle}><h2>Storage Detail</h2><Database aria-hidden="true" /></div>
+            <dl className={styles.statusDetails}>
+              <div><dt>Mode</dt><dd>{health?.storage?.mode ?? "-"}</dd></div>
+              <div><dt>Database</dt><dd>{health?.storage?.database ?? "-"}</dd></div>
+              <div><dt>MongoDB</dt><dd>{health?.storage?.mongoConfigured ? "Configured" : "Not configured"}</dd></div>
+              <div><dt>Last error</dt><dd>{health?.storage?.lastError ?? "None"}</dd></div>
+            </dl>
+          </article>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function StatusIncident({ title, detail, tone }: { title: string; detail: string; tone: HealthTone }) {
+  return (
+    <div className={styles.statusIncident}>
+      <i className={styles[`statusDot_${tone}`]} />
+      <div><b>{title}</b><p>{detail}</p></div>
+    </div>
+  );
+}
+
+function reportHealthMonitors(health: HealthResponse | null) {
+  if (!health) return [];
+  const integrations = health.integrations ?? {};
+  const storageDown = health.ok === false;
+  const storageMode = health.storage?.mode ?? "unknown";
+  const storageAttention = !storageDown && (storageMode !== "mongodb" || Boolean(health.storage?.lastError));
+  return [
+    {
+      name: "Report API",
+      description: "Next.js report app and health endpoint.",
+      status: health.ok ? "Operational" : "Down",
+      tone: health.ok ? "good" : "bad",
+      icon: health.ok ? CheckCircle2 : ServerCrash,
+      detail: health.ok ? "GET /api/health returned successfully." : health.message ?? "Health endpoint failed."
+    },
+    {
+      name: "Report Storage",
+      description: "Persistence for reports, leads, and subscriptions.",
+      status: storageDown ? "Down" : storageAttention ? "Attention" : "Operational",
+      tone: storageDown ? "bad" : storageAttention ? "warn" : "good",
+      icon: Database,
+      detail: storageAttention ? `Running in ${storageMode} mode${health.storage?.lastError ? `: ${health.storage.lastError}` : "."}` : `Connected to ${health.storage?.database ?? "database"}.`
+    },
+    {
+      name: "Google OAuth",
+      description: "GSC and GA4 connection readiness.",
+      status: integrations.googleOAuthConfigured ? "Operational" : "Not configured",
+      tone: integrations.googleOAuthConfigured ? "good" : "muted",
+      icon: Activity,
+      detail: integrations.googleOAuthConfigured ? "Client ID, secret, and redirect URI are present." : "Missing one or more OAuth environment variables."
+    },
+    {
+      name: "PageSpeed Insights",
+      description: "Lab performance and opportunity checks.",
+      status: integrations.pageSpeedConfigured ? "Operational" : "Not configured",
+      tone: integrations.pageSpeedConfigured ? "good" : "muted",
+      icon: Activity,
+      detail: integrations.pageSpeedConfigured ? "API key is configured." : "PAGESPEED_API_KEY or GOOGLE_API_KEY is missing."
+    },
+    {
+      name: "Chrome UX Report",
+      description: "Field data for Core Web Vitals.",
+      status: integrations.cruxConfigured ? "Operational" : "Not configured",
+      tone: integrations.cruxConfigured ? "good" : "muted",
+      icon: Activity,
+      detail: integrations.cruxConfigured ? "CrUX API access is configured." : "CRUX_API_KEY or GOOGLE_API_KEY is missing."
+    }
+  ] as const;
+}
+
 export default function ReportPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -2153,7 +2352,7 @@ export default function ReportPage() {
 
   const { tabs, aiVisibilityScore, issueCounts, issueTrend, openIssues, priority, nextPriority, auditScores, lastAuditedAt } = derived;
   const auditNav = Object.keys(tabs) as AuditTabId[];
-  const activeAuditTab = active === "overview" || active === "integrations" ? null : tabs[active];
+  const activeAuditTab = active === "overview" || active === "integrations" || active === "serverStatus" ? null : tabs[active];
   const priorityIssues = priorityIssueGroups(priority);
   const pdfExportUrl = `${API_BASE}/api/reports/${params.id}/export/pdf`;
   const reviewPriority = () => {
@@ -2228,6 +2427,11 @@ export default function ReportPage() {
               <span>Integration</span>
               <small>GSC · GA4 · Bing</small>
               <b>{integrationConnections.filter((connection) => connection.status === "CONNECTED").length}/3</b>
+            </button>
+            <button type="button" className={active === "serverStatus" ? styles.navActive : styles.monitorNavButton} onClick={() => setActive("serverStatus")}>
+              <span>Server Down Monitor</span>
+              <small>Live uptime checks</small>
+              <b>Live</b>
             </button>
             {auditNav.map((tab) => (
               <button key={tab} type="button" className={active === tab ? styles.navActive : ""} onClick={() => setActive(tab)}>
@@ -2366,6 +2570,8 @@ export default function ReportPage() {
                 error={integrationsError}
                 onConnectionsChange={setIntegrationConnections}
               />
+            ) : active === "serverStatus" ? (
+              <ServerStatusPanel />
             ) : active === "pageSpeed" ? (
               <PageSpeedOverviewPanel tab={tabs.pageSpeed} vitals={report.core_web_vitals} />
             ) : activeAuditTab ? (

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BarChart3, Gauge, LineChart, Link2, Search, Settings, Sparkles } from "lucide-react";
+import { Activity, BarChart3, Gauge, LineChart, Link2, Search, Settings, Sparkles } from "lucide-react";
 
 const nav = [
   {
@@ -18,6 +18,12 @@ const nav = [
       { href: "/dashboard/performance/analytics", label: "Website Analytics", icon: BarChart3 },
       { href: "/dashboard/performance/bing", label: "Bing Performance", icon: Search },
       { href: "/dashboard/performance/combined-insights", label: "Combined Insights", icon: Sparkles }
+    ]
+  },
+  {
+    label: "Server Monitoring",
+    items: [
+      { href: "/dashboard/status", label: "Server Down Monitor", icon: Activity }
     ]
   }
 ];

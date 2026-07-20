@@ -267,6 +267,16 @@
   text-align: center;
 }
 
+.monitorNavButton {
+  border-color: rgba(15, 118, 110, 0.18);
+  background: rgba(15, 118, 110, 0.05);
+}
+
+.monitorNavButton b {
+  background: rgba(15, 118, 110, 0.1);
+  color: #0f766e;
+}
+
 .sideNav .navActive {
   border-color: rgba(212, 175, 55, 0.7);
   background: #FBF1E3;
@@ -1327,6 +1337,264 @@
   color: var(--secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.statusPanel {
+  display: grid;
+  gap: 18px;
+}
+
+.statusPanel .secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.statusPanel .secondary svg {
+  width: 15px;
+  height: 15px;
+}
+
+.statusHero {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 16px;
+  border-radius: 12px;
+  padding: 22px;
+}
+
+.statusHero_good { border-color: rgba(15, 118, 110, 0.28); background: linear-gradient(135deg, rgba(15, 118, 110, 0.06), #fff 54%); }
+.statusHero_warn { border-color: rgba(212, 175, 55, 0.42); background: linear-gradient(135deg, rgba(251, 241, 227, 0.78), #fff 58%); }
+.statusHero_bad { border-color: rgba(220, 38, 38, 0.28); background: linear-gradient(135deg, rgba(251, 234, 234, 0.76), #fff 58%); }
+
+.statusHeroIcon,
+.statusMonitorIcon {
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+}
+
+.statusHeroIcon {
+  width: 48px;
+  height: 48px;
+  background: rgba(15, 118, 110, 0.1);
+  color: #0f766e;
+}
+
+.statusHeroIcon svg,
+.statusMonitorIcon svg,
+.statusSideCard svg {
+  width: 20px;
+  height: 20px;
+}
+
+.statusHero h3 {
+  margin: 12px 0 6px;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.statusHero p {
+  margin: 0;
+  max-width: 760px;
+  color: var(--secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.statusBadge {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.statusBadge_good { background: rgba(15, 118, 110, 0.1); color: #0f766e; }
+.statusBadge_warn { background: #FBF1E3; color: #8A5A00; }
+.statusBadge_bad { background: #FBEAEA; color: #DC2626; }
+.statusBadge_muted { background: #F2F2F2; color: #666; }
+
+.statusMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.statusMetricGrid article {
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.statusMetricGrid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.statusMetricGrid strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.statusMetricGrid p {
+  margin: 8px 0 0;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.statusTextGood { color: #0f766e; }
+.statusTextBad { color: #DC2626; }
+
+.statusGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 18px;
+}
+
+.statusMonitorList,
+.statusSideStack,
+.statusIncidentList {
+  display: grid;
+  gap: 12px;
+}
+
+.statusMonitor {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.statusMonitorIcon {
+  width: 40px;
+  height: 40px;
+}
+
+.statusIcon_good { background: rgba(15, 118, 110, 0.1); color: #0f766e; }
+.statusIcon_warn { background: #FBF1E3; color: #8A5A00; }
+.statusIcon_bad { background: #FBEAEA; color: #DC2626; }
+.statusIcon_muted { background: #F2F2F2; color: #666; }
+
+.statusMonitor h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.statusMonitor p,
+.statusMonitor small {
+  display: block;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.statusMonitor small {
+  margin-top: 4px;
+  color: #111;
+  font-weight: 700;
+}
+
+.statusSideCard {
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.statusSideCard .cardTitle {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.statusSideCard .cardTitle svg {
+  color: #0f766e;
+}
+
+.statusIncident {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 13px;
+}
+
+.statusIncident i {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 999px;
+}
+
+.statusIncident b {
+  display: block;
+  font-size: 13px;
+}
+
+.statusIncident p {
+  margin: 4px 0 0;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.statusDot_good { background: #0f766e; }
+.statusDot_warn { background: #D4AF37; }
+.statusDot_bad { background: #DC2626; }
+.statusDot_muted { background: #999; }
+
+.statusDetails {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.statusDetails div {
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+}
+
+.statusDetails div:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.statusDetails div:last-child {
+  padding-bottom: 0;
+}
+
+.statusDetails dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.statusDetails dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.statusSkeleton {
+  min-height: 76px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #F7F7F7, #fff, #F7F7F7);
+  background-size: 240% 100%;
+  animation: shimmer 1200ms linear infinite;
 }
 
 .integrationWorkspace {
