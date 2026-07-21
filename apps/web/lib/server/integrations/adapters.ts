@@ -6,6 +6,7 @@ import { integrationStore } from "./store";
 import type { ExternalProperty, IntegrationAdapter, IntegrationConnection, IntegrationProvider, MetricRow, OAuthTokenSet } from "./types";
 
 const API_TIMEOUT_MS = 15000;
+const GA4_MAX_METRICS_PER_REQUEST = 10;
 
 function assertEnv(keys: string[]) {
   loadServerEnv();
@@ -21,9 +22,44 @@ async function jsonFetch<T>(url: string, init: RequestInit = {}) {
   });
   const data = await response.json().catch(() => ({})) as T & { error?: unknown; error_description?: unknown };
   if (!response.ok) {
-    throw new Error(`Provider API request failed (${response.status}): ${JSON.stringify(data)}`);
+    throw new Error(providerApiErrorMessage(response.status, data));
   }
   return data;
+}
+
+function providerApiErrorMessage(status: number, data: { error?: unknown; error_description?: unknown }) {
+  const googleError = googleApiError(data.error);
+  if (googleError?.reason === "SERVICE_DISABLED" && googleError.serviceTitle) {
+    const action = googleError.activationUrl ? ` Enable it here, then retry after a few minutes: ${googleError.activationUrl}` : " Enable it in Google Cloud, then retry after a few minutes.";
+    return `${googleError.serviceTitle} is disabled for this Google Cloud project.${action}`;
+  }
+  const message = googleError?.message ?? stringValue(data.error_description) ?? stringValue(data.error);
+  return message ? `Provider API request failed (${status}): ${message}` : `Provider API request failed (${status}).`;
+}
+
+function googleApiError(error: unknown) {
+  if (!isRecord(error)) return null;
+  const details = Array.isArray(error.details) ? error.details : [];
+  const errorInfo = details.find((detail): detail is Record<string, unknown> => isRecord(detail) && detail["@type"] === "type.googleapis.com/google.rpc.ErrorInfo");
+  const metadata = isRecord(errorInfo?.metadata) ? errorInfo.metadata : {};
+  return {
+    message: stringValue(error.message),
+    reason: stringValue(errorInfo?.reason),
+    serviceTitle: stringValue(metadata.serviceTitle),
+    activationUrl: details
+      .filter(isRecord)
+      .flatMap((detail) => Array.isArray(detail.links) ? detail.links : [])
+      .find((link): link is Record<string, unknown> => isRecord(link) && Boolean(link.url))
+      ?.url as string | undefined
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : undefined;
 }
 
 async function tokenRequest(url: string, body: URLSearchParams) {
@@ -278,21 +314,31 @@ async function fetchGa4Range(adapter: GoogleAnalyticsAdapter, connection: Integr
   ];
   const rows: MetricRow[] = [];
   for (const group of dimensionGroups) {
-    const data = await jsonFetch<{
-      rows?: Array<{ dimensionValues?: Array<{ value?: string }>; metricValues?: Array<{ value?: string }> }>;
-    }>(`https://analyticsdata.googleapis.com/v1beta/${property}:runReport`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        dateRanges: [range],
-        dimensions: group.dimensions.map((name) => ({ name })),
-        metrics: metricNames.map((name) => ({ name })),
-        limit: "25000"
-      })
-    });
-    for (const item of data.rows ?? []) {
-      const dimensions = (item.dimensionValues ?? []).map((value) => value.value ?? "");
-      const metrics = Object.fromEntries(metricNames.map((name, index) => [name, Number(item.metricValues?.[index]?.value ?? 0)]));
+    const rowsByDimensions = new Map<string, { dimensions: string[]; metrics: Record<string, number> }>();
+    for (const metricBatch of chunk(metricNames, GA4_MAX_METRICS_PER_REQUEST)) {
+      const data = await jsonFetch<{
+        rows?: Array<{ dimensionValues?: Array<{ value?: string }>; metricValues?: Array<{ value?: string }> }>;
+      }>(`https://analyticsdata.googleapis.com/v1beta/${property}:runReport`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          dateRanges: [range],
+          dimensions: group.dimensions.map((name) => ({ name })),
+          metrics: metricBatch.map((name) => ({ name })),
+          limit: "25000"
+        })
+      });
+      for (const item of data.rows ?? []) {
+        const dimensions = (item.dimensionValues ?? []).map((value) => value.value ?? "");
+        const key = JSON.stringify(dimensions);
+        const existing = rowsByDimensions.get(key) ?? { dimensions, metrics: {} };
+        metricBatch.forEach((name, index) => {
+          existing.metrics[name] = Number(item.metricValues?.[index]?.value ?? 0);
+        });
+        rowsByDimensions.set(key, existing);
+      }
+    }
+    for (const { dimensions, metrics } of rowsByDimensions.values()) {
       rows.push(row({
         userId: connection.userId,
         projectId: connection.projectId,
@@ -306,6 +352,14 @@ async function fetchGa4Range(adapter: GoogleAnalyticsAdapter, connection: Integr
     }
   }
   return integrationStore.upsertMetricRows(rows);
+}
+
+function chunk<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function normalizeGa4Date(value: string) {

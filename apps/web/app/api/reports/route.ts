@@ -9,7 +9,7 @@ import { googleSearchConsoleContextForWebsite } from "@/lib/server/google-search
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
-const REPORT_ROUTE_TIMEOUT_MS = 260000;
+const REPORT_ROUTE_TIMEOUT_MS = 285000;
 
 class ReportRouteTimeoutError extends Error {
   constructor() {

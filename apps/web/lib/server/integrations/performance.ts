@@ -36,9 +36,34 @@ function topRows(rows: MetricRow[], key: string, limit = 10): DashboardTableRow[
     .slice(0, limit);
 }
 
-function dailyTrend(rows: MetricRow[], metrics: string[]) {
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function parseIsoDate(value: string) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatIsoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function dailyTrend(rows: MetricRow[], metrics: string[], range?: DateRange) {
   const dailyRows = rows.filter((row) => row.dimensionType === "daily");
   const groups = new Map<string, Record<string, number | string>>();
+  if (range) {
+    const start = parseIsoDate(range.startDate);
+    const end = parseIsoDate(range.endDate);
+    if (start && end && start <= end) {
+      for (let cursor = start; cursor <= end; cursor = addDays(cursor, 1)) {
+        const date = formatIsoDate(cursor);
+        groups.set(date, { date, ...Object.fromEntries(metrics.map((metric) => [metric, 0])) });
+      }
+    }
+  }
   for (const row of dailyRows) {
     const item = groups.get(row.date) ?? { date: row.date };
     for (const metric of metrics) item[metric] = Number(item[metric] ?? 0) + numberMetric(row, metric);
@@ -71,8 +96,9 @@ export async function performanceDashboard(input: {
   const { current, previous } = splitComparison(rows.filter((row) => row.dimensionType === "daily"));
 
   if (input.provider === "GOOGLE_SEARCH_CONSOLE") {
-    const clicks = sum(current, "clicks");
-    const impressions = sum(current, "impressions");
+    const dailyRows = rows.filter((row) => row.dimensionType === "daily");
+    const clicks = sum(dailyRows, "clicks");
+    const impressions = sum(dailyRows, "impressions");
     const prevClicks = sum(previous, "clicks");
     const prevImpressions = sum(previous, "impressions");
     const queryRows = rows.filter((row) => row.dimensionType === "query");
@@ -86,9 +112,9 @@ export async function performanceDashboard(input: {
         metric("Total clicks", clicks, prevClicks),
         metric("Total impressions", impressions, prevImpressions),
         metric("Average CTR", impressions ? clicks / impressions : 0, prevImpressions ? prevClicks / prevImpressions : 0, true),
-        metric("Average position", avg(current, "position"), avg(previous, "position"))
+        metric("Average position", avg(dailyRows, "position"), avg(previous, "position"))
       ],
-      trends: dailyTrend(rows, ["clicks", "impressions", "position"]),
+      trends: dailyTrend(rows, ["clicks", "impressions", "position"], range),
       tables: {
         "Top queries": topRows(queryRows, "clicks"),
         "Top pages": topRows(pageRows, "clicks"),
@@ -117,7 +143,7 @@ export async function performanceDashboard(input: {
         metric("Views", sum(current, "screenPageViews"), sum(previous, "screenPageViews")),
         metric("Key events", sum(current, "keyEvents"), sum(previous, "keyEvents"))
       ],
-      trends: dailyTrend(rows, ["activeUsers", "sessions", "screenPageViews", "keyEvents"]),
+      trends: dailyTrend(rows, ["activeUsers", "sessions", "screenPageViews", "keyEvents"], range),
       tables: {
         "Organic landing pages": topRows(rows.filter((row) => row.dimensionType === "landing_page"), "sessions"),
         "Source / medium": topRows(rows.filter((row) => row.dimensionType === "traffic_source"), "sessions"),
@@ -139,7 +165,7 @@ export async function performanceDashboard(input: {
       metric("CTR", avg(current, "ctr"), avg(previous, "ctr"), true),
       metric("Average position", avg(current, "position"), avg(previous, "position"))
     ],
-    trends: dailyTrend(rows, ["clicks", "impressions", "position"]),
+    trends: dailyTrend(rows, ["clicks", "impressions", "position"], range),
     tables: {
       "Top queries": topRows(rows.filter((row) => row.dimensionType === "query"), "clicks"),
       "Top pages": topRows(rows.filter((row) => row.dimensionType === "page"), "clicks"),

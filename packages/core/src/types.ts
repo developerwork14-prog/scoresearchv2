@@ -558,6 +558,34 @@ export interface CoreWebVitalsSnapshot {
   checkedAt: string;
   source?: "PageSpeed Insights" | "Local Browser" | "Crawl Timing";
   unavailableReason?: string;
+  lighthouse?: LighthouseSnapshot;
+}
+
+export interface LighthouseAuditItem {
+  id: string;
+  title: string;
+  description?: string;
+  score?: number | null;
+  scoreDisplayMode?: string;
+  displayValue?: string;
+  numericValue?: number;
+  savingsBytes?: number;
+}
+
+export interface LighthouseCategorySnapshot {
+  id: string;
+  title: string;
+  score?: number;
+  audits: LighthouseAuditItem[];
+  insights: LighthouseAuditItem[];
+  diagnostics: LighthouseAuditItem[];
+  passed: LighthouseAuditItem[];
+  notApplicable: LighthouseAuditItem[];
+  manual: LighthouseAuditItem[];
+}
+
+export interface LighthouseSnapshot {
+  categories: LighthouseCategorySnapshot[];
 }
 
 export interface RiskAssessment {

@@ -14,7 +14,7 @@ const nav = [
   {
     label: "Performance",
     items: [
-      { href: "/dashboard/performance/search-console", label: "Search Performance", icon: LineChart },
+      { href: "/dashboard/performance/search-console", label: "Google Search Console", icon: LineChart },
       { href: "/dashboard/performance/analytics", label: "Website Analytics", icon: BarChart3 },
       { href: "/dashboard/performance/bing", label: "Bing Performance", icon: Search },
       { href: "/dashboard/performance/combined-insights", label: "Combined Insights", icon: Sparkles }

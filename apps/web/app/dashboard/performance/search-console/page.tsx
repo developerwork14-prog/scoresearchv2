@@ -1,5 +1,5 @@
-import { PerformancePage } from "@/components/integration-provider-page";
+import { SearchConsoleDashboard } from "@/components/search-console-dashboard";
 
 export default function Page() {
-  return <PerformancePage endpoint="/api/performance/search-console" title="Search Performance" description="Google Search Console clicks, impressions, CTR, positions, queries, pages, countries, and device trends." />;
+  return <SearchConsoleDashboard />;
 }

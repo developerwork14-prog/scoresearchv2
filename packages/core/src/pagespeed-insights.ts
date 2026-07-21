@@ -1,5 +1,7 @@
 export type PageSpeedStrategy = "mobile" | "desktop";
 
+import type { LighthouseAuditItem, LighthouseSnapshot } from "./types.js";
+
 export interface PageSpeedMetrics {
   lcp?: number;
   inp?: number;
@@ -20,6 +22,7 @@ export interface PageSpeedMetrics {
   unusedCssSavingsBytes?: number;
   thirdPartyBlockingTime?: number;
   checkedAt: string;
+  lighthouse?: LighthouseSnapshot;
 }
 
 export interface PageSpeedFetchResult {
@@ -43,6 +46,7 @@ export interface PageSpeedSnapshot {
   checkedAt: string;
   source?: "PageSpeed Insights" | "Local Browser" | "Crawl Timing";
   unavailableReason?: string;
+  lighthouse?: LighthouseSnapshot;
 }
 
 const PAGESPEED_TIMEOUT_MS = 15000;
@@ -184,11 +188,13 @@ export async function fetchLocalPerformanceMetrics(url: string, strategy: PageSp
 
 export async function fetchPageSpeedInsightsDetailed(url: string, strategy: PageSpeedStrategy = "mobile"): Promise<PageSpeedFetchResult> {
   const key = apiKey("PAGESPEED_API_KEY", "GOOGLE_API_KEY");
-  const endpointFor = (includeKey: boolean) => {
+    const endpointFor = (includeKey: boolean) => {
     const endpoint = new URL("https://www.googleapis.com/pagespeedonline/v5/runPagespeed");
     endpoint.searchParams.set("url", url);
     endpoint.searchParams.set("strategy", strategy);
-    endpoint.searchParams.set("category", "performance");
+    for (const category of ["performance", "accessibility", "best-practices", "seo"]) {
+      endpoint.searchParams.append("category", category);
+    }
     if (includeKey && key) endpoint.searchParams.set("key", key);
     return endpoint;
   };
@@ -207,8 +213,8 @@ export async function fetchPageSpeedInsightsDetailed(url: string, strategy: Page
         metrics?: Record<string, { percentile?: number }>;
       };
       lighthouseResult?: {
-        categories?: { performance?: { score?: number } };
-        audits?: Record<string, { numericValue?: number; score?: number; details?: { overallSavingsBytes?: number } }>;
+        categories?: Record<string, { id?: string; title?: string; score?: number; auditRefs?: { id: string; weight?: number; group?: string }[] }>;
+        audits?: Record<string, { id?: string; title?: string; description?: string; numericValue?: number; score?: number | null; scoreDisplayMode?: string; displayValue?: string; details?: { overallSavingsBytes?: number } }>;
       };
     } | null;
     if (!response.ok) {
@@ -244,7 +250,8 @@ export async function fetchPageSpeedInsightsDetailed(url: string, strategy: Page
       unusedJsSavingsBytes: audits["unused-javascript"]?.details?.overallSavingsBytes,
       unusedCssSavingsBytes: audits["unused-css-rules"]?.details?.overallSavingsBytes,
       thirdPartyBlockingTime: audits["third-party-summary"]?.numericValue,
-      checkedAt: new Date().toISOString()
+      checkedAt: new Date().toISOString(),
+      lighthouse: lighthouseSnapshot(data.lighthouseResult?.categories, audits)
     } };
   };
 
@@ -288,6 +295,56 @@ export function pageSpeedSnapshot(
     speedIndex: mobile?.speedIndex ?? desktop?.speedIndex,
     tbt: mobile?.tbt ?? desktop?.tbt,
     checkedAt: mobile?.checkedAt ?? desktop?.checkedAt ?? new Date().toISOString(),
-    source: "PageSpeed Insights"
+    source: "PageSpeed Insights",
+    lighthouse: mobile?.lighthouse ?? desktop?.lighthouse
   };
+}
+
+function compactAudit(id: string, audit?: {
+  id?: string;
+  title?: string;
+  description?: string;
+  numericValue?: number;
+  score?: number | null;
+  scoreDisplayMode?: string;
+  displayValue?: string;
+  details?: { overallSavingsBytes?: number };
+}): LighthouseAuditItem | undefined {
+  if (!audit?.title) return undefined;
+  return {
+    id: audit.id ?? id,
+    title: audit.title,
+    description: audit.description,
+    score: audit.score,
+    scoreDisplayMode: audit.scoreDisplayMode,
+    displayValue: audit.displayValue,
+    numericValue: audit.numericValue,
+    savingsBytes: audit.details?.overallSavingsBytes
+  };
+}
+
+function lighthouseSnapshot(
+  categories?: Record<string, { id?: string; title?: string; score?: number; auditRefs?: { id: string; weight?: number; group?: string }[] }>,
+  audits: Record<string, { id?: string; title?: string; description?: string; numericValue?: number; score?: number | null; scoreDisplayMode?: string; displayValue?: string; details?: { overallSavingsBytes?: number } }> = {}
+): LighthouseSnapshot | undefined {
+  if (!categories) return undefined;
+  const items = Object.entries(categories).map(([id, category]) => {
+    const refs = [...(category.auditRefs ?? [])].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0));
+    const categoryAudits = refs
+      .map((ref) => compactAudit(ref.id, audits[ref.id]))
+      .filter((audit): audit is LighthouseAuditItem => Boolean(audit));
+    const failed = categoryAudits.filter((audit) => audit.score !== null && audit.score !== undefined && audit.score < 1 && audit.scoreDisplayMode !== "notApplicable");
+    return {
+      id: category.id ?? id,
+      title: category.title ?? id,
+      score: category.score === undefined ? undefined : Math.round(category.score * 100),
+      audits: categoryAudits,
+      insights: failed.filter((audit) => Boolean(audit.savingsBytes) || /render-blocking|image|request|cache|compression|lcp|unused/i.test(audit.id)),
+      diagnostics: failed.filter((audit) => !audit.savingsBytes && !/render-blocking|image|request|cache|compression|lcp|unused/i.test(audit.id)),
+      passed: categoryAudits.filter((audit) => audit.score === 1),
+      notApplicable: categoryAudits.filter((audit) => audit.scoreDisplayMode === "notApplicable"),
+      manual: categoryAudits.filter((audit) => audit.scoreDisplayMode === "manual" || audit.scoreDisplayMode === "informative")
+    };
+  });
+  return items.length ? { categories: items } : undefined;
 }

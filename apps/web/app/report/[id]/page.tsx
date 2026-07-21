@@ -1,11 +1,11 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Activity, AlertTriangle, Bot, CheckCircle2, Clock3, Database, FileText, MapPin, RefreshCw, Search, ServerCrash, ShieldCheck, Video } from "lucide-react";
+import { Activity, AlertTriangle, Bot, CheckCircle2, Clock3, Database, Download, FileText, MapPin, RefreshCw, Search, ServerCrash, ShieldCheck, Video } from "lucide-react";
 import type { StructuredAiVisibilityReport } from "@aiva/core";
 import { API_BASE, getReport } from "@/lib/api";
-import type { ExternalProperty, IntegrationProvider, PublicIntegrationConnection } from "@/lib/server/integrations/types";
+import type { DashboardMetric, DashboardTableRow, ExternalProperty, IntegrationProvider, PerformanceDashboard, PublicIntegrationConnection } from "@/lib/server/integrations/types";
 import {
   CHATGPT_CITATION_CATEGORIES,
   CHATGPT_CITATION_CHECK_IDS,
@@ -28,7 +28,7 @@ type CategoryLike = {
   skippedChecks?: number;
 };
 type AuditTabId = "technical" | "pageSpeed" | "crawlability" | "structuredData" | "onPageSeo" | "imageSeo" | "eeat" | "trustSignals" | "entitySeo" | "geo" | "citation" | "gemini" | "indexability";
-type ActiveSectionId = "overview" | "integrations" | "serverStatus" | AuditTabId;
+type ActiveSectionId = "overview" | "integrations" | "searchConsole" | "serverStatus" | AuditTabId;
 type TabInfo = { label: string; categories: CategoryLike[]; checks: CheckLike[]; score: number; issues: number; available: boolean; checkedAt?: string };
 type IssueImpactCounts = { high: number; medium: number; low: number };
 type IssueTrendPoint = IssueImpactCounts & { label: string };
@@ -518,13 +518,15 @@ function IntegrationWorkspace({
   connections,
   loading,
   error,
-  onConnectionsChange
+  onConnectionsChange,
+  onOpenSearchConsole
 }: {
   projectId: string;
   connections: PublicIntegrationConnection[];
   loading: boolean;
   error: string;
   onConnectionsChange: (connections: PublicIntegrationConnection[]) => void;
+  onOpenSearchConsole: () => void;
 }) {
   const [propertiesByProvider, setPropertiesByProvider] = useState<Partial<Record<IntegrationProvider, ExternalProperty[]>>>({});
   const [selectedByProvider, setSelectedByProvider] = useState<Partial<Record<IntegrationProvider, string>>>({});
@@ -665,6 +667,11 @@ function IntegrationWorkspace({
                         {working ? "Syncing..." : "Sync now"}
                       </button>
                     ) : null}
+                    {item.provider === "GOOGLE_SEARCH_CONSOLE" && connection?.externalPropertyId ? (
+                      <button className={styles.secondary} type="button" onClick={onOpenSearchConsole}>
+                        View dashboard
+                      </button>
+                    ) : null}
                   </div>
                   {properties ? (
                     properties.length ? (
@@ -707,6 +714,570 @@ function IntegrationWorkspace({
   );
 }
 
+function SearchConsoleReportPanel({
+  projectId,
+  reportUrl,
+  tabs,
+  vitals,
+  onBack
+}: {
+  projectId: string;
+  reportUrl: string;
+  tabs: Record<AuditTabId, TabInfo>;
+  vitals?: StructuredAiVisibilityReport["core_web_vitals"];
+  onBack: () => void;
+}) {
+  const [data, setData] = useState<PerformanceDashboard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [activeTable, setActiveTable] = useState("Top queries");
+  const [activeRange, setActiveRange] = useState("Custom");
+  const [customRangeOpen, setCustomRangeOpen] = useState(false);
+  const [activeConsoleView, setActiveConsoleView] = useState("Performance");
+
+  const load = useCallback(async (range?: { startDate: string; endDate: string }) => {
+    setLoading(true);
+    setError("");
+    const query = new URLSearchParams({ projectId });
+    if (range) {
+      query.set("startDate", range.startDate);
+      query.set("endDate", range.endDate);
+    }
+    try {
+      const response = await fetch(`/api/performance/search-console?${query.toString()}`, { cache: "no-store" });
+      const payload = await response.json().catch(() => ({})) as PerformanceDashboard & { message?: string };
+      if (!response.ok) throw new Error(payload.message ?? "Could not load Google Search Console data.");
+      setData(payload);
+      setStartDate((current) => current || payload.range.startDate);
+      setEndDate((current) => current || payload.range.endDate);
+      const firstTable = Object.keys(payload.tables ?? {}).find((key) => (payload.tables[key] ?? []).length);
+      if (firstTable) setActiveTable(firstTable);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load Google Search Console data.");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  const applyDateRange = useCallback(() => {
+    setActiveRange("Custom");
+    if ((startDate && !endDate) || (!startDate && endDate)) {
+      setError("Select both start and end dates before applying.");
+      return;
+    }
+    if (startDate && endDate && startDate > endDate) {
+      setError("Start date must be before end date.");
+      return;
+    }
+    setCustomRangeOpen(false);
+    void load(startDate && endDate ? { startDate, endDate } : undefined);
+  }, [endDate, load, startDate]);
+
+  const applyPresetRange = useCallback((label: string, days: number) => {
+    const end = data?.range.endDate ?? formatInputDate(new Date());
+    const start = subtractIsoDays(end, days - 1);
+    setActiveRange(label);
+    setCustomRangeOpen(false);
+    setStartDate(start);
+    setEndDate(end);
+    void load({ startDate: start, endDate: end });
+  }, [data?.range.endDate, load]);
+
+  const openConsoleView = useCallback((view: string, table?: string) => {
+    setActiveConsoleView(view);
+    if (table) setActiveTable(table);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const csv = useMemo(() => {
+    if (!data?.trends?.length) return "";
+    const headers = Object.keys(data.trends[0]);
+    return [headers.join(","), ...data.trends.map((row) => headers.map((key) => JSON.stringify(row[key] ?? "")).join(","))].join("\n");
+  }, [data]);
+
+  const tables = data?.tables ?? {};
+  const tableNames = ["Top queries", "Top pages", "Top countries", "Device distribution", "Low CTR, high impression queries", "Keywords positions 4 to 20"].filter((name) => tables[name]);
+  const propertyName = data?.connection?.externalPropertyName ?? data?.connection?.externalPropertyId ?? "Selected property";
+  const lastSync = data?.connection?.lastSyncedAt ? formatAuditDate(data.connection.lastSyncedAt) : "Not synced yet";
+  const importedRange = data?.connection?.importedStartDate && data.connection.importedEndDate ? `${data.connection.importedStartDate} to ${data.connection.importedEndDate}` : "No imported data";
+
+  return (
+    <section className={styles.gscConsoleShell}>
+      <aside className={styles.gscConsoleSidebar}>
+        <button className={`${styles.gscPropertySelector} ${activeConsoleView === "Property" ? styles.gscConsoleNavActive : ""}`} type="button" onClick={() => openConsoleView("Property")}>
+          <span>{propertyName}</span>
+        </button>
+        {["Overview", "Insights", "Performance", "URL inspection"].map((item) => (
+          <button key={item} className={activeConsoleView === item ? styles.gscConsoleNavActive : ""} type="button" onClick={() => openConsoleView(item, item === "Insights" ? "Low CTR, high impression queries" : undefined)}>
+            {item}
+          </button>
+        ))}
+        <div className={styles.gscConsoleNavGroup}>
+          <p>Indexing</p>
+          <button className={activeConsoleView === "Indexing" ? styles.gscConsoleNavActive : ""} type="button" onClick={() => openConsoleView("Indexing")}>Indexing</button>
+          <button className={activeConsoleView === "Pages" ? styles.gscConsoleNavActive : ""} type="button" onClick={() => openConsoleView("Pages", "Top pages")}>Pages</button>
+          <button className={activeConsoleView === "Sitemaps" ? styles.gscConsoleNavActive : ""} type="button" onClick={() => openConsoleView("Sitemaps")}>Sitemaps</button>
+          <button className={activeConsoleView === "Removals" ? styles.gscConsoleNavActive : ""} type="button" onClick={() => openConsoleView("Removals")}>Removals</button>
+        </div>
+        <div className={styles.gscConsoleNavGroup}>
+          <p>Experience</p>
+          <button className={activeConsoleView === "Experience" ? styles.gscConsoleNavActive : ""} type="button" onClick={() => openConsoleView("Experience")}>Experience</button>
+          <button className={activeConsoleView === "Core Web Vitals" ? styles.gscConsoleNavActive : ""} type="button" onClick={() => openConsoleView("Core Web Vitals")}>Core Web Vitals</button>
+          <button className={activeConsoleView === "HTTPS" ? styles.gscConsoleNavActive : ""} type="button" onClick={() => openConsoleView("HTTPS")}>HTTPS</button>
+        </div>
+        <dl className={styles.gscConsolePropertyMeta}>
+          <div><dt>Account</dt><dd>{data?.connection?.accountEmail ?? "Connected account"}</dd></div>
+          <div><dt>Last sync</dt><dd>{lastSync}</dd></div>
+        </dl>
+      </aside>
+
+      <div className={styles.gscConsoleMain}>
+        <div className={styles.gscConsoleHeader}>
+          <div>
+            <p>Google Search Console</p>
+            <h2>{activeConsoleView}</h2>
+          </div>
+          <div className={styles.gscHeaderActions}>
+            <button className={styles.secondary} type="button" onClick={onBack}>Back to integrations</button>
+            <a className={styles.secondary} href={`data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`} download="google-search-console-performance.csv"><Download size={15} /> Export CSV</a>
+          </div>
+        </div>
+
+        <div className={styles.gscFilterBar}>
+          <button className={`${styles.gscRangeChip} ${activeRange === "24 hours" ? styles.gscRangeChipActive : ""}`} type="button" onClick={() => applyPresetRange("24 hours", 1)}>24 hours</button>
+          <button className={`${styles.gscRangeChip} ${activeRange === "7 days" ? styles.gscRangeChipActive : ""}`} type="button" onClick={() => applyPresetRange("7 days", 7)}>7 days</button>
+          <button className={`${styles.gscRangeChip} ${activeRange === "28 days" ? styles.gscRangeChipActive : ""}`} type="button" onClick={() => applyPresetRange("28 days", 28)}>28 days</button>
+          <div className={styles.gscCustomPicker}>
+            <button
+              className={`${styles.gscRangeChip} ${activeRange === "Custom" ? styles.gscRangeChipActive : ""}`}
+              type="button"
+              onClick={() => {
+                setActiveRange("Custom");
+                setCustomRangeOpen((open) => !open);
+              }}
+            >
+              Custom
+            </button>
+            {customRangeOpen ? (
+              <div className={styles.gscCustomRange}>
+              <label><span>Start</span><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
+              <label><span>End</span><input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
+              <button className={styles.primary} type="button" onClick={applyDateRange} disabled={loading}>{loading ? "Loading..." : "Apply"}</button>
+              </div>
+            ) : null}
+          </div>
+          <span className={styles.gscFilterMeta}>{data ? `${data.range.startDate} to ${data.range.endDate}` : "Select a date range"}</span>
+        </div>
+
+        {error ? <p className={styles.integrationError}>{error}</p> : null}
+        {!loading && data && !data.connection ? <p className={styles.integrationHelp}>Connect Google Search Console, select a property, and sync data before viewing performance.</p> : null}
+
+        {loading && !data ? (
+          <div className={styles.gscSkeletonGrid}>{[1, 2, 3, 4].map((item) => <i key={item} />)}</div>
+        ) : data ? (
+          activeConsoleView === "Performance" ? (
+          <>
+            <article className={`${styles.card} ${styles.gscChartCard}`}>
+              <div className={styles.gscMetricStrip}>
+                {data.metrics.map((metric) => <SearchConsoleMetric key={metric.label} metric={metric} />)}
+              </div>
+              <div className={styles.cardTitle}>
+                <div><h2>Performance graph</h2><p>Daily Search Console trend</p></div>
+                <span className={styles.gscChartGranularity}>Daily</span>
+              </div>
+              <SearchConsoleChart points={data.trends} />
+            </article>
+
+            <div className={`${styles.card} ${styles.gscTableLayout}`}>
+              <div className={styles.gscTableTabs}>
+                {tableNames.map((name) => <button key={name} className={activeTable === name ? styles.gscTableTabActive : ""} type="button" onClick={() => setActiveTable(name)}>{formatGscTableName(name)}</button>)}
+              </div>
+              <SearchConsoleTable title={activeTable} rows={tables[activeTable] ?? []} />
+            </div>
+          </>
+          ) : (
+            <SearchConsoleViewPanel
+              view={activeConsoleView}
+              propertyName={propertyName}
+              reportUrl={reportUrl}
+              importedRange={importedRange}
+              activeTable={activeTable}
+              tables={tables}
+              rows={tables[activeTable] ?? []}
+              metrics={data.metrics}
+              trends={data.trends}
+              tabs={tabs}
+              vitals={vitals}
+            />
+          )
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function SearchConsoleMetric({ metric }: { metric: DashboardMetric }) {
+  const active = metric.label === "Total clicks" || metric.label === "Total impressions";
+  return (
+    <article className={`${styles.gscMetric} ${active ? styles.gscMetricActive : ""}`}>
+      <p>{metric.label}</p>
+      <strong>{metric.value}</strong>
+    </article>
+  );
+}
+
+function SearchConsoleChart({ points }: { points: Array<Record<string, number | string>> }) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const visible = points;
+  const clicks = visible.map((point) => Number(point.clicks ?? 0));
+  const impressions = visible.map((point) => Number(point.impressions ?? 0));
+  const maxValue = Math.max(...clicks, ...impressions, 3);
+  const chart = { left: 18, top: 28, width: 684, height: 210, bottom: 238 };
+  const activeIndex = hoverIndex ?? Math.max(visible.length - 1, 0);
+  const activePoint = visible[activeIndex];
+  const activeX = chartX(activeIndex, visible.length, chart);
+  const activeClickY = chartY(clicks[activeIndex] ?? 0, maxValue, chart);
+  const activeImpressionY = chartY(impressions[activeIndex] ?? 0, maxValue, chart);
+  const noActivity = clicks.every((value) => value === 0) && impressions.every((value) => value === 0);
+
+  if (!visible.length) return <p className={styles.integrationHelp}>No graph data was imported for this range.</p>;
+
+  const handlePointerMove = (event: MouseEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * 720;
+    const index = Math.round(((x - chart.left) / chart.width) * Math.max(visible.length - 1, 1));
+    setHoverIndex(Math.min(Math.max(index, 0), visible.length - 1));
+  };
+
+  return (
+    <div className={styles.gscChartWrap}>
+      <svg
+        className={styles.gscChart}
+        viewBox="0 0 720 300"
+        preserveAspectRatio="none"
+        aria-label="Google Search Console clicks and impressions graph"
+        onMouseMove={handlePointerMove}
+        onMouseLeave={() => setHoverIndex(null)}
+      >
+        <rect x="0" y="0" width="720" height="300" rx="18" fill="#fff" />
+        {[0, 1, 2, 3, 4].map((line) => {
+          const y = chart.top + line * (chart.height / 4);
+          const labelValue = maxValue * (1 - line / 4);
+          return (
+            <g key={line}>
+              <line x1={chart.left} x2={chart.left + chart.width} y1={y} y2={y} stroke="#ECECEC" />
+              <text x="18" y={y - 6} fill="#9A9A9A" fontSize="10" fontWeight="700">{formatCompactNumber(labelValue)}</text>
+            </g>
+          );
+        })}
+        <path d={linePath(impressions, maxValue, chart)} fill="none" stroke="#2B2B2B" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" opacity="0.5" />
+        <path d={linePath(clicks, maxValue, chart)} fill="none" stroke="#D4AF37" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" />
+        <line x1={chart.left} x2={chart.left + chart.width} y1={chart.bottom} y2={chart.bottom} stroke="#DADADA" />
+        <line x1={activeX} x2={activeX} y1={chart.top} y2={chart.bottom} stroke="#111111" strokeOpacity="0.14" />
+        <circle cx={activeX} cy={activeImpressionY} r="3.5" fill="#fff" stroke="#2B2B2B" strokeWidth="1.6" opacity="0.8" />
+        <circle cx={activeX} cy={activeClickY} r="4" fill="#fff" stroke="#D4AF37" strokeWidth="1.8" />
+        <text x={chart.left} y="280" fill="#777" fontSize="12" fontWeight="800">{formatChartDate(String(visible[0]?.date ?? ""))}</text>
+        <text x={chart.left + chart.width / 2} y="280" textAnchor="middle" fill="#777" fontSize="12" fontWeight="800">{formatChartDate(String(visible[Math.floor(visible.length / 2)]?.date ?? ""))}</text>
+        <text x={chart.left + chart.width} y="280" textAnchor="end" fill="#777" fontSize="12" fontWeight="800">{formatChartDate(String(visible[visible.length - 1]?.date ?? ""))}</text>
+        {noActivity ? <text x="360" y="145" textAnchor="middle" fill="#777" fontSize="13" fontWeight="800">No clicks or impressions in this date range</text> : null}
+      </svg>
+      {activePoint ? (
+        <div
+          className={styles.gscChartTooltip}
+          style={{ left: `${(activeX / 720) * 100}%`, top: `${(Math.min(activeClickY, activeImpressionY) / 300) * 100}%` }}
+        >
+          <b>{formatChartDate(String(activePoint.date ?? ""))}</b>
+          <span><i className={styles.gscClicks} />{formatCompactNumber(clicks[activeIndex] ?? 0)} clicks</span>
+          <span><i className={styles.gscImpressions} />{formatCompactNumber(impressions[activeIndex] ?? 0)} impressions</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function chartX(index: number, length: number, chart: { left: number; width: number }) {
+  if (length <= 1) return chart.left + chart.width / 2;
+  return chart.left + (index / (length - 1)) * chart.width;
+}
+
+function chartY(value: number, max: number, chart: { top: number; height: number }) {
+  return chart.top + (1 - value / Math.max(max, 1)) * chart.height;
+}
+
+function linePath(values: number[], max: number, chart: { left: number; top: number; width: number; height: number }) {
+  if (!values.length) return "";
+  return values.map((value, index) => {
+    const x = chartX(index, values.length, chart);
+    const y = chartY(value, max, chart);
+    return `${index ? "L" : "M"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }).join(" ");
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(Math.round(value));
+}
+
+function formatChartDate(value: string) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(date);
+}
+
+function SearchConsoleTable({ title, rows }: { title: string; rows: DashboardTableRow[] }) {
+  return (
+    <article className={styles.gscTableCard}>
+      <div className={styles.cardTitle}><h2>{title}</h2><p>{rows.length} rows</p></div>
+      {rows.length ? (
+        <div className={styles.gscTableWrap}>
+          <table>
+            <thead><tr><th>Item</th><th>Primary</th><th>Secondary</th></tr></thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={`${row.label}-${row.value}-${row.secondary}`}>
+                  <td title={row.label}>{row.label}</td>
+                  <td>{row.value}</td>
+                  <td>{row.secondary ?? "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className={styles.integrationHelp}>No rows for this date range.</p>}
+    </article>
+  );
+}
+
+function SearchConsoleViewPanel({
+  view,
+  propertyName,
+  reportUrl,
+  importedRange,
+  activeTable,
+  tables,
+  rows,
+  metrics,
+  trends,
+  tabs,
+  vitals
+}: {
+  view: string;
+  propertyName: string;
+  reportUrl: string;
+  importedRange: string;
+  activeTable: string;
+  tables: PerformanceDashboard["tables"];
+  rows: DashboardTableRow[];
+  metrics: DashboardMetric[];
+  trends: PerformanceDashboard["trends"];
+  tabs: Record<AuditTabId, TabInfo>;
+  vitals?: StructuredAiVisibilityReport["core_web_vitals"];
+}) {
+  const queryRows = tables["Top queries"] ?? [];
+  const pageRows = tables["Top pages"] ?? [];
+  const countryRows = tables["Top countries"] ?? [];
+  const deviceRows = tables["Device distribution"] ?? [];
+  const lowCtrRows = tables["Low CTR, high impression queries"] ?? [];
+  const indexChecks = checksMatching([tabs.indexability, tabs.crawlability], /index|canonical|noindex|robots|crawl|render|sitemap/i);
+  const sitemapChecks = checksMatching([tabs.indexability, tabs.crawlability], /sitemap|xml/i);
+  const removalChecks = checksMatching([tabs.indexability], /noindex|x-robots|robots|nosnippet|snippet|blocked|removal/i);
+  const httpsChecks = checksMatching([tabs.technical, tabs.pageSpeed], /https|ssl|tls|mixed content|certificate/i);
+  const experienceChecks = checksMatching([tabs.pageSpeed], /lcp|inp|cls|fcp|ttfb|speed|performance|core web/i);
+  const urlChecks = checksMatching([tabs.indexability, tabs.technical], /url|canonical|redirect|https|index|robots/i).slice(0, 8);
+  const headline = view === "Overview"
+    ? "Property overview"
+    : view === "Insights"
+      ? "Search insights"
+      : view;
+  const description = view === "Overview"
+    ? "A quick summary of the connected property and imported Search Console range."
+    : view === "Insights"
+      ? "Queries that may need title, snippet, or content improvements."
+      : view === "Property"
+        ? "Connected Search Console property details."
+        : view === "URL inspection"
+          ? "Indexability and access checks for the report URL."
+          : view === "Pages"
+          ? "Imported page performance rows for this date range."
+          : view === "Indexing"
+            ? "Indexing, crawl, robots, canonical, and sitemap evidence from this audit."
+            : view === "Sitemaps"
+              ? "Sitemap discovery and validation evidence from the audit."
+              : view === "Removals"
+                ? "Noindex, robots, and snippet-control signals that can remove or suppress URLs."
+                : view === "Experience"
+                  ? "Page experience and speed checks from the audit."
+                  : view === "Core Web Vitals"
+                    ? "Measured lab and field-style Core Web Vitals values."
+                    : view === "HTTPS"
+                      ? "HTTPS, SSL, and secure loading evidence."
+                      : "Search Console details for this section.";
+
+  return (
+    <article className={`${styles.card} ${styles.gscConsoleViewCard}`}>
+      <div className={styles.cardTitle}>
+        <div><h2>{headline}</h2><p>{description}</p></div>
+      </div>
+      {view === "Overview" || view === "Property" ? (
+        <>
+          <div className={styles.gscOverviewGrid}>
+            <div><span>Property</span><strong>{propertyName}</strong></div>
+            <div><span>Imported range</span><strong>{importedRange}</strong></div>
+            <div><span>Daily points</span><strong>{trends.length}</strong></div>
+            {metrics.map((metric) => <div key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong></div>)}
+          </div>
+          {view === "Overview" ? (
+            <div className={styles.gscOverviewTables}>
+              <MiniRows title="Top queries" rows={queryRows.slice(0, 5)} />
+              <MiniRows title="Top pages" rows={pageRows.slice(0, 5)} />
+              <MiniRows title="Devices" rows={deviceRows.slice(0, 5)} />
+            </div>
+          ) : null}
+        </>
+      ) : view === "Insights" || view === "Pages" ? (
+        <SearchConsoleTable title={activeTable} rows={rows} />
+      ) : view === "URL inspection" ? (
+        <>
+          <div className={styles.gscOverviewGrid}>
+            <div><span>Inspected URL</span><strong>{reportUrl}</strong></div>
+            <div><span>Indexability score</span><strong>{formatScore(tabs.indexability.score)}</strong></div>
+            <div><span>Indexing issues</span><strong>{tabs.indexability.issues}</strong></div>
+          </div>
+          <AuditCheckList checks={urlChecks} emptyText="No URL inspection issues were found in the latest audit." />
+        </>
+      ) : view === "Indexing" ? (
+        <>
+          <CategorySummary tab={tabs.indexability} />
+          <AuditCheckList checks={indexChecks} emptyText="No indexing issues were found in the latest audit." />
+        </>
+      ) : view === "Sitemaps" ? (
+        <AuditCheckList checks={sitemapChecks} emptyText="No sitemap issues were found in the latest audit." />
+      ) : view === "Removals" ? (
+        <AuditCheckList checks={removalChecks} emptyText="No removal or noindex issues were found in the latest audit." />
+      ) : view === "Experience" ? (
+        <>
+          <CategorySummary tab={tabs.pageSpeed} />
+          <AuditCheckList checks={experienceChecks} emptyText="No page experience issues were found in the latest audit." />
+        </>
+      ) : view === "Core Web Vitals" ? (
+        <CoreVitalsSummary vitals={vitals} checks={experienceChecks} />
+      ) : view === "HTTPS" ? (
+        <AuditCheckList checks={httpsChecks} emptyText="No HTTPS or SSL issues were found in the latest audit." />
+      ) : (
+        <SearchConsoleTable title={activeTable} rows={rows} />
+      )}
+    </article>
+  );
+}
+
+function MiniRows({ title, rows }: { title: string; rows: DashboardTableRow[] }) {
+  return (
+    <div className={styles.gscMiniRows}>
+      <h3>{title}</h3>
+      {rows.length ? rows.map((row) => (
+        <p key={`${title}-${row.label}`}>
+          <span>{row.label}</span>
+          <b>{row.value}</b>
+        </p>
+      )) : <em>No rows for this range.</em>}
+    </div>
+  );
+}
+
+function CategorySummary({ tab }: { tab: TabInfo }) {
+  return (
+    <div className={styles.gscCategorySummary}>
+      <div><span>Score</span><strong>{formatScore(tab.score)}</strong></div>
+      <div><span>Open issues</span><strong>{tab.issues}</strong></div>
+      <div><span>Checked</span><strong>{formatAuditDate(tab.checkedAt)}</strong></div>
+      <div><span>Categories</span><strong>{tab.categories.length}</strong></div>
+    </div>
+  );
+}
+
+function CoreVitalsSummary({ vitals, checks }: { vitals?: StructuredAiVisibilityReport["core_web_vitals"]; checks: CheckLike[] }) {
+  const items = [
+    { label: "Mobile LCP", value: formatMs(vitals?.mobileLcp) },
+    { label: "Desktop LCP", value: formatMs(vitals?.desktopLcp) },
+    { label: "CLS", value: formatDecimal(vitals?.cls) },
+    { label: "INP", value: formatMs(vitals?.inp) },
+    { label: "TTFB", value: formatMs(vitals?.ttfb) },
+    { label: "Performance score", value: formatScore(vitals?.performanceScore) }
+  ];
+  return (
+    <>
+      <div className={styles.gscOverviewGrid}>
+        {items.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value}</strong></div>)}
+      </div>
+      <AuditCheckList checks={checks} emptyText="No Core Web Vitals issues were found in the latest audit." />
+    </>
+  );
+}
+
+function AuditCheckList({ checks, emptyText }: { checks: CheckLike[]; emptyText: string }) {
+  const visible = checks.slice(0, 12);
+  if (!visible.length) return <p className={styles.integrationHelp}>{emptyText}</p>;
+  return (
+    <div className={styles.gscCheckList}>
+      {visible.map((check) => {
+        const passed = Boolean(check.passed) && !check.warning;
+        const skipped = Boolean(check.skipped || check.notApplicable);
+        return (
+          <div key={`${check.category}-${check.name}-${check.id ?? ""}`}>
+            <span className={passed ? styles.passed : skipped ? styles.skipped : check.warning ? styles.minor : styles.needs}>
+              {passed ? "Passed" : skipped ? "Skipped" : check.warning ? "Warning" : "Issue"}
+            </span>
+            <strong>{check.name ?? "Audit check"}</strong>
+            <p>{check.issueSummary || check.whatIsWrong || readableEvidence(check.evidence) || "No additional evidence was provided."}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function checksMatching(tabs: TabInfo[], pattern: RegExp) {
+  return tabs.flatMap((tab) => tab.checks).filter((check) =>
+    pattern.test(`${check.category ?? ""} ${check.name ?? ""} ${check.issueSummary ?? ""} ${check.whatIsWrong ?? ""} ${readableEvidence(check.evidence)}`)
+  );
+}
+
+function readableEvidence(evidence: unknown) {
+  if (!evidence) return "";
+  if (typeof evidence === "string") return evidence;
+  if (typeof evidence === "number" || typeof evidence === "boolean") return String(evidence);
+  try {
+    return JSON.stringify(evidence);
+  } catch {
+    return "";
+  }
+}
+
+function formatGscTableName(name: string) {
+  if (name === "Top queries") return "Queries";
+  if (name === "Top pages") return "Pages";
+  if (name === "Top countries") return "Countries";
+  if (name === "Device distribution") return "Devices";
+  if (name === "Low CTR, high impression queries") return "Search appearance";
+  if (name === "Keywords positions 4 to 20") return "Days";
+  return name;
+}
+
+function formatInputDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function subtractIsoDays(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  date.setUTCDate(date.getUTCDate() - days);
+  return formatInputDate(date);
+}
+
 function pageSpeedMetricStatus(value: number | undefined, good: number, direction: "under" | "over" = "under") {
   if (value === undefined || !Number.isFinite(value)) return { label: "N/A", className: styles.skipped };
   const passed = direction === "under" ? value <= good : value >= good;
@@ -724,6 +1295,52 @@ function pageSpeedCheckStatus(check?: CheckLike) {
 function findCheck(checks: CheckLike[], ...names: string[]) {
   const normalizedNames = names.map((name) => name.toLowerCase());
   return checks.find((check) => normalizedNames.some((name) => String(check.name ?? "").toLowerCase().includes(name)));
+}
+
+function parsedEvidenceRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  if (typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return undefined;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function numberFromEvidence(check: CheckLike | undefined, metricPattern?: RegExp) {
+  if (!check) return undefined;
+  const record = parsedEvidenceRecord(check.evidence);
+  if (record) {
+    const metricName = String(record.metric ?? record.name ?? "");
+    if (!metricPattern || metricPattern.test(metricName)) {
+      for (const key of ["measuredValue", "value", "score", "numericValue"]) {
+        const value = Number(record[key]);
+        if (Number.isFinite(value)) return value;
+      }
+    }
+  }
+  const text = evidenceText(check.evidence);
+  if (metricPattern && !metricPattern.test(`${check.name ?? ""} ${text}`)) return undefined;
+  const match = text.match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function pageSpeedScoreFromCheck(check: CheckLike | undefined) {
+  const value = numberFromEvidence(check);
+  return value !== undefined ? clampScore(value) : undefined;
+}
+
+function findMetricCheck(checks: CheckLike[], metricPattern: RegExp, ...nameHints: string[]) {
+  return checks.find((check) => {
+    const text = `${check.name ?? ""} ${evidenceText(check.evidence)}`;
+    return metricPattern.test(text) && (!nameHints.length || nameHints.some((hint) => text.toLowerCase().includes(hint.toLowerCase())));
+  });
 }
 
 function PageSpeedScoreDonut({ score }: { score: number }) {
@@ -746,11 +1363,23 @@ function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: Struct
   const warnings = checks.filter((check) => check.warning && !check.skipped).length;
   const issues = checks.filter((check) => !check.passed && !check.skipped && !check.warning).length;
   const skipped = checks.filter((check) => check.skipped).length;
-  const mobileScore = vitals?.mobilePerformanceScore ?? vitals?.performanceScore;
+  const mobileScoreCheck = findCheck(checks, "Mobile PSI", "Mobile PageSpeed", "Mobile performance");
+  const mobileScore = vitals?.mobilePerformanceScore ?? vitals?.performanceScore ?? pageSpeedScoreFromCheck(mobileScoreCheck);
   const desktopScoreCheck = findCheck(checks, "Desktop PSI");
   const desktopScoreMatch = evidenceText(desktopScoreCheck?.evidence).match(/(\d{1,3})\s*(?:via|$)/i);
-  const desktopScore = vitals?.desktopPerformanceScore ?? (desktopScoreMatch ? clampScore(Number(desktopScoreMatch[1])) : undefined);
+  const desktopScore = vitals?.desktopPerformanceScore ?? pageSpeedScoreFromCheck(desktopScoreCheck) ?? (desktopScoreMatch ? clampScore(Number(desktopScoreMatch[1])) : undefined);
+  const lcpCheck = findMetricCheck(checks, /\bLCP\b|Largest Contentful Paint/i, "lcp");
+  const inpCheck = findMetricCheck(checks, /\bINP\b|Interaction to Next Paint/i, "inp");
+  const clsCheck = findMetricCheck(checks, /\bCLS\b|Cumulative Layout Shift/i, "cls");
+  const fcpCheck = findMetricCheck(checks, /\bFCP\b|First Contentful Paint/i, "fcp");
+  const speedIndexCheck = findMetricCheck(checks, /Speed Index/i, "speed index");
   const ttfbCheck = findCheck(checks, "TTFB < 500ms", "TTFB <800ms", "TTFB");
+  const lcp = vitals?.mobileLcp ?? numberFromEvidence(lcpCheck, /\bLCP\b|Largest Contentful Paint/i);
+  const inp = vitals?.inp ?? numberFromEvidence(inpCheck, /\bINP\b|Interaction to Next Paint/i);
+  const cls = vitals?.cls ?? numberFromEvidence(clsCheck, /\bCLS\b|Cumulative Layout Shift/i);
+  const fcp = vitals?.fcp ?? numberFromEvidence(fcpCheck, /\bFCP\b|First Contentful Paint/i);
+  const ttfb = vitals?.ttfb ?? numberFromEvidence(ttfbCheck, /\bTTFB\b|Time to First Byte/i);
+  const speedIndex = vitals?.speedIndex ?? numberFromEvidence(speedIndexCheck, /Speed Index/i);
   const compressionCheck = findCheck(checks, "Compression on All Text Assets", "GZIP/Brotli", "compression");
   const cacheCheck = findCheck(checks, "Cache-Control");
   const cdnCheck = findCheck(checks, "CDN Edge Caching", "CDN");
@@ -759,20 +1388,21 @@ function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: Struct
   const renderBlockingCheck = findCheck(checks, "render-blocking");
   const preloadCheck = findCheck(checks, "Preload Critical Resources", "LCP image preloaded");
   const lazyCheck = findCheck(checks, "Below-Fold Images Lazy-Loaded", "lazy");
-  const issueChecks = checks.filter((check) => !check.passed && !check.skipped).slice(0, 6);
-  const source = vitals?.source ?? (vitals?.ttfb !== undefined ? "Crawl Timing" : "PageSpeed Insights");
-  const score = mobileScore !== undefined ? clampScore(mobileScore) : tab.available ? tab.score : 0;
+  const hasPageSpeedEvidence = [mobileScore, desktopScore, lcp, inp, cls, fcp, ttfb, speedIndex].some((value) => value !== undefined && Number.isFinite(value));
+  const source = vitals?.source ?? (hasPageSpeedEvidence ? "PageSpeed Insights" : vitals?.ttfb !== undefined ? "Crawl Timing" : "PageSpeed Insights");
+  const score = mobileScore !== undefined ? clampScore(mobileScore) : tab.available ? tab.score : undefined;
+  const pageSpeedUnavailable = !hasPageSpeedEvidence || source === "Crawl Timing";
 
   const metricRows = [
-    { label: "LCP", detail: "Largest Contentful Paint", value: formatMs(vitals?.mobileLcp), status: pageSpeedMetricStatus(vitals?.mobileLcp, 2500) },
-    { label: "INP", detail: "Interaction to Next Paint", value: formatMs(vitals?.inp), status: pageSpeedMetricStatus(vitals?.inp, 200) },
-    { label: "CLS", detail: "Cumulative Layout Shift", value: formatDecimal(vitals?.cls), status: pageSpeedMetricStatus(vitals?.cls, 0.1) },
-    { label: "FCP", detail: "First Contentful Paint", value: formatMs(vitals?.fcp), status: pageSpeedMetricStatus(vitals?.fcp, 1800) },
-    { label: "TTFB", detail: "Time to First Byte", value: formatMs(vitals?.ttfb), status: pageSpeedMetricStatus(vitals?.ttfb, 500) },
-    { label: "Speed Index", detail: "Visual load progress", value: formatMs(vitals?.speedIndex), status: pageSpeedMetricStatus(vitals?.speedIndex, 3400) }
+    { label: "LCP", detail: "Largest Contentful Paint", value: formatMs(lcp), status: pageSpeedMetricStatus(lcp, 2500) },
+    { label: "INP", detail: "Interaction to Next Paint", value: formatMs(inp), status: pageSpeedMetricStatus(inp, 200) },
+    { label: "CLS", detail: "Cumulative Layout Shift", value: formatDecimal(cls), status: pageSpeedMetricStatus(cls, 0.1) },
+    { label: "FCP", detail: "First Contentful Paint", value: formatMs(fcp), status: pageSpeedMetricStatus(fcp, 1800) },
+    { label: "TTFB", detail: "Time to First Byte", value: formatMs(ttfb), status: pageSpeedMetricStatus(ttfb, 500) },
+    { label: "Speed Index", detail: "Visual load progress", value: formatMs(speedIndex), status: pageSpeedMetricStatus(speedIndex, 3400) }
   ];
   const serverRows = [
-    { label: "Server Response", value: formatMs(vitals?.ttfb), status: pageSpeedCheckStatus(ttfbCheck) },
+    { label: "Server Response", value: formatMs(ttfb), status: pageSpeedMetricStatus(ttfb, 500) },
     { label: "Compression", value: compressionCheck ? (compressionCheck.passed ? "Enabled" : "Review") : "N/A", status: pageSpeedCheckStatus(compressionCheck) },
     { label: "Browser Cache", value: cacheCheck ? (cacheCheck.passed ? "Enabled" : "Review") : "N/A", status: pageSpeedCheckStatus(cacheCheck) },
     { label: "CDN Detection", value: cdnCheck ? (cdnCheck.passed ? "Detected" : "Review") : "N/A", status: pageSpeedCheckStatus(cdnCheck) }
@@ -784,6 +1414,15 @@ function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: Struct
     { label: "Critical preload", check: preloadCheck },
     { label: "Lazy loading", check: lazyCheck }
   ];
+  const pageSpeedSections = pageSpeedInsightSections(checks);
+  const lighthouseCategories = vitals?.lighthouse?.categories ?? [];
+  const lighthousePerformance = lighthouseCategories.find((category) => category.id === "performance");
+  const actualInsights = lighthousePerformance ? lighthousePerformance.insights.map(lighthouseInsightRow) : pageSpeedSections.insights;
+  const actualDiagnostics = lighthousePerformance ? lighthousePerformance.diagnostics.map(lighthouseInsightRow) : pageSpeedSections.diagnostics;
+  const actualPassed = lighthousePerformance ? lighthousePerformance.passed.map(lighthouseInsightRow) : pageSpeedSections.passed;
+  const actualSkipped = lighthousePerformance ? [...lighthousePerformance.notApplicable, ...lighthousePerformance.manual].map(lighthouseInsightRow) : pageSpeedSections.skipped;
+  const topInsights = [...actualInsights, ...actualDiagnostics].slice(0, 4);
+  const rolePriorities = pageSpeedRolePriorities([...actualInsights, ...actualDiagnostics], metricRows, serverRows);
 
   return (
     <section className={styles.pageSpeedPanel}>
@@ -791,31 +1430,71 @@ function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: Struct
         <div>
           <p>Audit workspace</p>
           <h2>PageSpeed Overview</h2>
-          <span>Review Core Web Vitals, PageSpeed checks, server timing, asset optimization, and the highest-impact performance fixes.</span>
+          <span>{pageSpeedUnavailable ? "Google PageSpeed Insights did not return Lighthouse data for this saved report. Showing crawler timing that was available." : "Review Core Web Vitals, PageSpeed checks, server timing, asset optimization, and the highest-impact performance fixes."}</span>
         </div>
         <div className={styles.auditHeroScore}>
-          <strong>{tab.available ? `${score}%` : "N/A"}</strong>
-          <span>{issues} open issues</span>
+          <strong>{score !== undefined ? `${score}%` : "N/A"}</strong>
+          <span>{pageSpeedUnavailable ? "PSI unavailable" : `${issues} open issues`}</span>
           <span>{skipped} skipped checks</span>
         </div>
       </div>
 
-      <div className={styles.pageSpeedGrid}>
+      <div className={styles.pageSpeedCommandCenter}>
         <article className={`${styles.card} ${styles.pageSpeedOverviewCard}`}>
-          <div className={styles.cardTitle}><div><h2>Performance Overview</h2><p>{source} · {formatAuditDate(vitals?.checkedAt ?? tab.checkedAt)}</p></div></div>
-          {vitals?.unavailableReason ? <p className={styles.pageSpeedNotice}>{vitals.unavailableReason}</p> : null}
+          <div className={styles.cardTitle}><div><h2>Performance Snapshot</h2><p>{source} · {formatAuditDate(vitals?.checkedAt ?? tab.checkedAt)}</p></div></div>
+          {pageSpeedUnavailable ? <p className={styles.pageSpeedNotice}>{vitals?.unavailableReason ?? "PageSpeed Insights data unavailable. Re-run the audit after configuring PageSpeed API access or allowing local Lighthouse fallback."}</p> : null}
           <div className={styles.pageSpeedScoreWrap}>
-            <PageSpeedScoreDonut score={score} />
+            {score !== undefined ? <PageSpeedScoreDonut score={score} /> : <div className={styles.pageSpeedUnavailableGauge}><strong>N/A</strong><span>No Lighthouse score</span></div>}
             <div className={styles.pageSpeedMiniScores}>
               <div><span>Mobile Score</span><strong>{formatScore(mobileScore)}</strong></div>
               <div><span>Desktop Score</span><strong>{formatScore(desktopScore)}</strong></div>
               <div><span>Passed</span><strong>{passed}</strong></div>
               <div><span>Warnings</span><strong>{warnings}</strong></div>
-              <div><span>Critical Issues</span><strong>{issues}</strong></div>
+              <div><span>Open Issues</span><strong>{issues}</strong></div>
+              <div><span>Source</span><strong>{source}</strong></div>
             </div>
           </div>
         </article>
 
+        <article className={`${styles.card} ${styles.pageSpeedFocusCard}`}>
+          <div className={styles.cardTitle}><div><h2>What Needs Attention</h2><p>{topInsights.length ? "Highest-impact items from the audit" : "No PageSpeed opportunities returned"}</p></div></div>
+          {topInsights.length ? (
+            <div className={styles.pageSpeedFocusList}>
+              {topInsights.map((row) => (
+                <div key={`focus-${row.title}`}>
+                  <strong>{row.title}</strong>
+                  <span>{row.savings ?? row.badge}</span>
+                  <p>{row.description}</p>
+                </div>
+              ))}
+            </div>
+          ) : <p className={styles.emptyChecks}>Only basic crawler timing is available for this saved report.</p>}
+        </article>
+      </div>
+
+      <div className={styles.pageSpeedRoleGrid}>
+        {rolePriorities.map((role) => (
+          <article className={`${styles.card} ${styles.pageSpeedRoleCard}`} key={role.title}>
+            <span>{role.label}</span>
+            <h3>{role.title}</h3>
+            <p>{role.summary}</p>
+            <ul>{role.items.map((item) => <li key={`${role.title}-${item}`}>{item}</li>)}</ul>
+          </article>
+        ))}
+      </div>
+
+      {lighthouseCategories.length ? (
+        <div className={styles.pageSpeedCategoryStrip}>
+          {lighthouseCategories.map((category) => (
+            <article className={`${styles.card} ${styles.pageSpeedCategoryCard}`} key={category.id}>
+              <strong>{category.score ?? "N/A"}</strong>
+              <span>{category.title}</span>
+            </article>
+          ))}
+        </div>
+      ) : null}
+
+      <div className={styles.pageSpeedGrid}>
         <article className={`${styles.card} ${styles.pageSpeedTableCard}`}>
           <div className={styles.cardTitle}><h2>Core Web Vitals</h2></div>
           <div className={styles.pageSpeedRows}>
@@ -859,26 +1538,186 @@ function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: Struct
         </article>
 
         <article className={`${styles.card} ${styles.pageSpeedIssueCard}`}>
-          <div className={styles.cardTitle}><h2>Priority Performance Issues</h2><p>{issueChecks.length ? "Fix these first" : "No actionable performance failures"}</p></div>
-          {issueChecks.length ? (
-            <ul>
-              {issueChecks.map((check) => (
-                <li key={`${check.id}-${check.name}`}>
-                  <b>!</b>
-                  <span>{check.name}</span>
-                  <em>{check.severity ?? "Issue"}</em>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className={styles.emptyChecks}>Completed PageSpeed checks did not return actionable failures.</p>
-          )}
+          <div className={styles.cardTitle}><h2>Insights</h2><p>{actualInsights.length ? "Opportunities from Lighthouse" : "No scored PageSpeed opportunities"}</p></div>
+          <PageSpeedInsightList rows={actualInsights} emptyText="No actionable performance insights were returned." />
+        </article>
+
+        <article className={`${styles.card} ${styles.pageSpeedIssueCard}`}>
+          <div className={styles.cardTitle}><h2>Diagnostics</h2><p>Additional performance signals</p></div>
+          <PageSpeedInsightList rows={actualDiagnostics} emptyText="No diagnostic performance items were returned." />
+        </article>
+
+        <article className={`${styles.card} ${styles.pageSpeedIssueCard}`}>
+          <div className={styles.cardTitle}><h2>Passed audits</h2><p>{actualPassed.length} checks passed</p></div>
+          <PageSpeedInsightList rows={actualPassed.slice(0, 8)} emptyText="No passed PageSpeed audits were returned." compact />
+        </article>
+
+        <article className={`${styles.card} ${styles.pageSpeedIssueCard}`}>
+          <div className={styles.cardTitle}><h2>Not applicable</h2><p>{actualSkipped.length} checks skipped</p></div>
+          <PageSpeedInsightList rows={actualSkipped.slice(0, 8)} emptyText="No skipped PageSpeed audits were returned." compact />
         </article>
       </div>
 
-      <AuditDetailPanel tab={tab} />
+      {tab.available ? <AuditDetailPanel tab={tab} /> : null}
     </section>
   );
+}
+
+type PageSpeedInsightRow = {
+  title: string;
+  description: string;
+  badge: string;
+  savings?: string;
+  status: ReturnType<typeof pageSpeedCheckStatus>;
+};
+type StoredLighthouseAudit = NonNullable<NonNullable<NonNullable<StructuredAiVisibilityReport["core_web_vitals"]>["lighthouse"]>["categories"][number]["audits"][number]>;
+
+function PageSpeedInsightList({ rows, emptyText, compact = false }: { rows: PageSpeedInsightRow[]; emptyText: string; compact?: boolean }) {
+  if (!rows.length) return <p className={styles.emptyChecks}>{emptyText}</p>;
+  return (
+    <div className={`${styles.pageSpeedInsightList} ${compact ? styles.pageSpeedInsightListCompact : ""}`}>
+      {rows.map((row) => (
+        <div key={`${row.title}-${row.badge}`}>
+          <span className={row.status.className}>{row.badge}</span>
+          <strong>{row.title}{row.savings ? <em>{row.savings}</em> : null}</strong>
+          {!compact ? <p>{row.description}</p> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function pageSpeedInsightSections(checks: CheckLike[]) {
+  const rows = checks.map(pageSpeedInsightRow);
+  return {
+    insights: rows.filter((row) => row.kind === "insight"),
+    diagnostics: rows.filter((row) => row.kind === "diagnostic"),
+    passed: rows.filter((row) => row.kind === "passed"),
+    skipped: rows.filter((row) => row.kind === "skipped")
+  };
+}
+
+function lighthouseInsightRow(audit: StoredLighthouseAudit): PageSpeedInsightRow {
+  const passed = audit.score === 1;
+  const skipped = audit.scoreDisplayMode === "notApplicable" || audit.scoreDisplayMode === "manual" || audit.scoreDisplayMode === "informative";
+  return {
+    title: audit.title,
+    description: audit.description ?? audit.displayValue ?? "Lighthouse audit item.",
+    savings: audit.savingsBytes ? `Est savings of ${formatBytes(audit.savingsBytes)}` : audit.displayValue,
+    badge: passed ? "Passed" : skipped ? "Not applicable" : "Insight",
+    status: passed ? { label: "Good", className: styles.passed } : skipped ? { label: "Skipped", className: styles.skipped } : { label: "Issue", className: styles.needs }
+  };
+}
+
+function pageSpeedInsightRow(check: CheckLike): PageSpeedInsightRow & { kind: "insight" | "diagnostic" | "passed" | "skipped" } {
+  const status = pageSpeedCheckStatus(check);
+  const passed = Boolean(check.passed) && !check.warning;
+  const skipped = Boolean(check.skipped || check.notApplicable);
+  const title = pageSpeedTitle(check.name ?? "PageSpeed audit");
+  const text = readableEvidence(check.evidence);
+  const description = check.issueSummary || check.whatIsWrong || pageSpeedDescription(title, text);
+  const savings = estimatedSavings(text);
+  const kind = skipped
+    ? "skipped"
+    : passed
+      ? "passed"
+      : pageSpeedDiagnosticPattern.test(`${check.name ?? ""} ${text}`)
+        ? "diagnostic"
+        : "insight";
+  return {
+    title,
+    description,
+    savings,
+    status,
+    kind,
+    badge: passed ? "Passed" : skipped ? "Not applicable" : check.warning ? "Diagnostics" : "Insight"
+  };
+}
+
+const pageSpeedDiagnosticPattern = /unused css|unused javascript|long main-thread|main-thread|dom size|forced reflow|network dependency|third-party|total blocking|speed index|tti/i;
+
+function pageSpeedTitle(name: string) {
+  const normalized = name
+    .replace(/^0\s+/, "")
+    .replace(/\s*pass\s*\/.*$/i, "")
+    .replace(/\s*(>=|<=|<|>)\s*[\d.]+\s*(ms|px|percent)?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/ttfb|server response/i.test(normalized)) return "Document request latency";
+  if (/render-blocking/i.test(normalized)) return "Render-blocking requests";
+  if (/compression|brotli|gzip/i.test(normalized)) return "Applies text compression";
+  if (/webp|avif|image compression|optimized images/i.test(normalized)) return "Improve image delivery";
+  if (/unused css/i.test(normalized)) return "Reduce unused CSS";
+  if (/unused js|unused javascript/i.test(normalized)) return "Reduce unused JavaScript";
+  if (/dom node/i.test(normalized)) return "Optimize DOM size";
+  if (/lcp image|largest contentful paint/i.test(normalized)) return "LCP breakdown";
+  if (/cache-control|etag|last-modified/i.test(normalized)) return "Use efficient cache lifetimes";
+  return normalized || name;
+}
+
+function pageSpeedDescription(title: string, evidence: string) {
+  if (/Document request latency/i.test(title)) return "Reduce latency by avoiding redirects, ensuring a fast server response, and enabling text compression.";
+  if (/Render-blocking requests/i.test(title)) return "Reduce render-blocking resources so the browser can paint above-the-fold content sooner.";
+  if (/Improve image delivery/i.test(title)) return "Serve appropriately compressed, modern-format images and prioritize the LCP image.";
+  if (/Reduce unused CSS/i.test(title)) return "Remove unused rules and defer non-critical CSS to reduce transfer size and style calculation work.";
+  if (/LCP breakdown/i.test(title)) return "Review the LCP element, load delay, resource load time, and render delay.";
+  return evidence || "Review this audit item to improve the page's Lighthouse performance profile.";
+}
+
+function estimatedSavings(text: string) {
+  const bytes = text.match(/(?:savings|saved|save)[^0-9]*(\d+(?:\.\d+)?)\s*(KiB|MiB|KB|MB|bytes?)/i)
+    ?? text.match(/(\d+(?:\.\d+)?)\s*(KiB|MiB|KB|MB)\s*(?:savings|could be saved|unused)/i);
+  if (bytes) return `Est savings of ${bytes[1]} ${bytes[2]}`;
+  const ms = text.match(/(?:savings|save|reduce)[^0-9]*(\d+(?:\.\d+)?)\s*ms/i);
+  if (ms) return `Est savings of ${ms[1]} ms`;
+  return undefined;
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value)) return "0 B";
+  if (value >= 1024 * 1024) return `${Math.round(value / 1024 / 102.4) / 10} MiB`;
+  if (value >= 1024) return `${Math.round(value / 102.4) / 10} KiB`;
+  return `${Math.round(value)} B`;
+}
+
+function pageSpeedRolePriorities(
+  rows: PageSpeedInsightRow[],
+  metrics: Array<{ label: string; value: string; status: ReturnType<typeof pageSpeedMetricStatus> }>,
+  serverRows: Array<{ label: string; value: string; status: ReturnType<typeof pageSpeedMetricStatus> }>
+) {
+  const needsWork = (status: ReturnType<typeof pageSpeedMetricStatus>) => status.label !== "Good" && status.label !== "Skipped";
+  const developerItems = [
+    ...rows.filter((row) => /request|render|css|javascript|cache|compression|server|blocking/i.test(row.title)).map((row) => row.title),
+    ...serverRows.filter((row) => needsWork(row.status)).map((row) => `${row.label}: ${row.value}`)
+  ].slice(0, 4);
+  const uiItems = [
+    ...metrics.filter((row) => /LCP|CLS|FCP|Speed Index/.test(row.label) && needsWork(row.status)).map((row) => `${row.label}: ${row.value}`),
+    ...rows.filter((row) => /image|layout|lcp|dom|visual/i.test(row.title)).map((row) => row.title)
+  ].slice(0, 4);
+  const seoItems = [
+    ...metrics.filter((row) => /LCP|INP|CLS/.test(row.label) && needsWork(row.status)).map((row) => `${row.label}: ${row.value}`),
+    ...rows.filter((row) => /request|image|cache|lcp/i.test(row.title)).map((row) => row.title)
+  ].slice(0, 4);
+  return [
+    {
+      label: "Developer",
+      title: "Fix the loading path",
+      summary: "Prioritize server response, compression, caching, render-blocking resources, and unused code.",
+      items: developerItems.length ? developerItems : ["No developer-specific performance blockers were returned."]
+    },
+    {
+      label: "UI Design",
+      title: "Protect the first impression",
+      summary: "Watch LCP, layout shifts, image delivery, and visual load progress that affect perceived quality.",
+      items: uiItems.length ? uiItems : ["No UI-facing Web Vitals issues were returned."]
+    },
+    {
+      label: "SEO",
+      title: "Support organic visibility",
+      summary: "Core Web Vitals can affect landing-page experience and should be reviewed alongside content and indexability.",
+      items: seoItems.length ? seoItems : ["No SEO-facing PageSpeed issues were returned."]
+    }
+  ];
 }
 
 type DetailItem = {
@@ -2293,8 +3132,11 @@ export default function ReportPage() {
     const gemini = categoriesFromChecks(geminiChecks, GEMINI_CITATION_CATEGORIES);
     const crawlability = technical.filter((category) => ["Robots.txt & Sitemap", "Indexability & Crawlability", "Internal Linking", "AI Crawl Readiness"].includes(category.categoryName));
     const crawlabilityChecks = checksForCategories(report.technical_audit?.checks ?? [], crawlability);
-    const pageSpeed = technical.filter((category) => PAGE_SPEED_CATEGORIES.includes(category.categoryName as typeof PAGE_SPEED_CATEGORIES[number]));
-    const pageSpeedChecks = checksForCategories(report.technical_audit?.checks ?? [], pageSpeed);
+    const pageSpeedFromSummary = technical.filter((category) => PAGE_SPEED_CATEGORIES.includes(category.categoryName as typeof PAGE_SPEED_CATEGORIES[number]));
+    const pageSpeedChecks = pageSpeedFromSummary.length
+      ? checksForCategories(report.technical_audit?.checks ?? [], pageSpeedFromSummary)
+      : (report.technical_audit?.checks ?? []).filter((check) => PAGE_SPEED_CATEGORIES.includes(check.category as typeof PAGE_SPEED_CATEGORIES[number]));
+    const pageSpeed = pageSpeedFromSummary.length ? pageSpeedFromSummary : categoriesFromChecks(pageSpeedChecks, [...PAGE_SPEED_CATEGORIES]);
     const entitySeo = technical.filter((category) => ENTITY_SEO_CATEGORIES.includes(category.categoryName as typeof ENTITY_SEO_CATEGORIES[number]));
     const entitySeoChecks = checksForCategories(report.technical_audit?.checks ?? [], entitySeo);
     const structuredDataCategories = report.structured_data_audit?.categories ?? [];
@@ -2352,7 +3194,8 @@ export default function ReportPage() {
 
   const { tabs, aiVisibilityScore, issueCounts, issueTrend, openIssues, priority, nextPriority, auditScores, lastAuditedAt } = derived;
   const auditNav = Object.keys(tabs) as AuditTabId[];
-  const activeAuditTab = active === "overview" || active === "integrations" || active === "serverStatus" ? null : tabs[active];
+  const activeAuditTab = active === "overview" || active === "integrations" || active === "searchConsole" || active === "serverStatus" ? null : tabs[active];
+  const focusMode = active === "searchConsole";
   const priorityIssues = priorityIssueGroups(priority);
   const pdfExportUrl = `${API_BASE}/api/reports/${params.id}/export/pdf`;
   const reviewPriority = () => {
@@ -2417,8 +3260,8 @@ export default function ReportPage() {
           <div><a href={report.url} target="_blank">{report.url}</a><span>·</span><span className={styles.liveDot} />Last audited: {formatAuditDate(lastAuditedAt)}</div>
         </section>
 
-        <div className={styles.dashboardShell}>
-          <aside className={styles.sideNav} aria-label="Report sections">
+        <div className={`${styles.dashboardShell} ${focusMode ? styles.dashboardShellFocused : ""}`}>
+          {!focusMode ? <aside className={styles.sideNav} aria-label="Report sections">
             <button type="button" className={active === "overview" ? styles.navActive : ""} onClick={() => setActive("overview")}>
               <span>Overview</span>
               <b>{aiVisibilityScore}%</b>
@@ -2440,7 +3283,7 @@ export default function ReportPage() {
                 <b>{tabs[tab].available ? `${tabs[tab].score}%` : "N/A"}</b>
               </button>
             ))}
-          </aside>
+          </aside> : null}
 
           <div className={styles.dashboardMain}>
             {active === "overview" ? (
@@ -2569,6 +3412,15 @@ export default function ReportPage() {
                 loading={integrationsLoading}
                 error={integrationsError}
                 onConnectionsChange={setIntegrationConnections}
+                onOpenSearchConsole={() => setActive("searchConsole")}
+              />
+            ) : active === "searchConsole" ? (
+              <SearchConsoleReportPanel
+                projectId={params.id}
+                reportUrl={report.url}
+                tabs={tabs}
+                vitals={report.core_web_vitals}
+                onBack={() => setActive("integrations")}
               />
             ) : active === "serverStatus" ? (
               <ServerStatusPanel />
