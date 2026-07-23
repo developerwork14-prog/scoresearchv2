@@ -8,13 +8,21 @@ export const providerParamSchema = z.enum(integrationProviders);
 
 export function requestContext(request: NextRequest) {
   const url = new URL(request.url);
+  // A deployment without an application sign-in layer can still operate as a
+  // single-tenant workspace when these server-only variables are configured.
+  // Request values always take precedence, so an authenticated integration can
+  // replace these defaults later without changing this API surface.
+  const defaultUserId = process.env.GLOMAUDIT_DEFAULT_USER_ID
+    ?? (process.env.NODE_ENV === "production" ? "" : "demo-user");
+  const defaultProjectId = process.env.GLOMAUDIT_DEFAULT_PROJECT_ID
+    ?? (process.env.NODE_ENV === "production" ? "" : "demo-project");
   const userId = request.headers.get("x-glomaudit-user-id")
     ?? request.cookies.get("glomaudit_user_id")?.value
-    ?? (process.env.NODE_ENV === "production" ? "" : "demo-user");
+    ?? defaultUserId;
   const projectId = url.searchParams.get("projectId")
     ?? request.headers.get("x-glomaudit-project-id")
     ?? request.cookies.get("glomaudit_project_id")?.value
-    ?? (process.env.NODE_ENV === "production" ? "" : "demo-project");
+    ?? defaultProjectId;
   if (!userId || !projectId) {
     throw new Error("Authenticated user and project context are required.");
   }
