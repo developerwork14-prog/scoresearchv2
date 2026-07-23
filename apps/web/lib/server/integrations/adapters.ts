@@ -303,12 +303,12 @@ async function fetchGa4Range(adapter: GoogleAnalyticsAdapter, connection: Integr
   const property = connection.externalPropertyId;
   const metricNames = [
     "activeUsers", "newUsers", "sessions", "engagedSessions", "engagementRate", "averageSessionDuration",
-    "userEngagementDuration", "screenPageViews", "eventCount", "keyEvents", "sessionKeyEventRate"
+    "userEngagementDuration", "screenPageViews", "eventCount", "eventsPerSession", "keyEvents", "sessionKeyEventRate", "totalRevenue"
   ];
   const dimensionGroups: Array<{ dimensionType: MetricRow["dimensionType"]; dimensions: string[] }> = [
     { dimensionType: "daily", dimensions: ["date"] },
     { dimensionType: "landing_page", dimensions: ["date", "landingPagePlusQueryString"] },
-    { dimensionType: "traffic_source", dimensions: ["date", "sessionSource", "sessionMedium", "sessionDefaultChannelGroup"] },
+    { dimensionType: "traffic_source", dimensions: ["date", "sessionPrimaryChannelGroup", "landingPagePlusQueryString", "sessionSource", "sessionMedium"] },
     { dimensionType: "device", dimensions: ["date", "deviceCategory"] },
     { dimensionType: "geo", dimensions: ["date", "country", "city"] }
   ];
@@ -347,7 +347,15 @@ async function fetchGa4Range(adapter: GoogleAnalyticsAdapter, connection: Integr
         date: normalizeGa4Date(dimensions[0] ?? range.endDate),
         dimensionType: group.dimensionType,
         dimensionValue: group.dimensionType === "daily" ? "all" : dimensions.slice(1).join(" / "),
-        metrics
+        metrics: group.dimensionType === "traffic_source"
+          ? {
+              ...metrics,
+              channelGroup: dimensions[1] ?? "(unassigned)",
+              landingPage: dimensions[2] ?? "(not set)",
+              source: dimensions[3] ?? "(not set)",
+              medium: dimensions[4] ?? "(not set)"
+            }
+          : metrics
       }));
     }
   }

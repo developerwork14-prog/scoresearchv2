@@ -28,7 +28,7 @@ type CategoryLike = {
   skippedChecks?: number;
 };
 type AuditTabId = "technical" | "pageSpeed" | "crawlability" | "structuredData" | "onPageSeo" | "imageSeo" | "eeat" | "trustSignals" | "entitySeo" | "geo" | "citation" | "gemini" | "indexability";
-type ActiveSectionId = "overview" | "integrations" | "searchConsole" | "serverStatus" | AuditTabId;
+type ActiveSectionId = "overview" | "integrations" | "searchConsole" | "analytics" | "serverStatus" | AuditTabId;
 type TabInfo = { label: string; categories: CategoryLike[]; checks: CheckLike[]; score: number; issues: number; available: boolean; checkedAt?: string };
 type IssueImpactCounts = { high: number; medium: number; low: number };
 type IssueTrendPoint = IssueImpactCounts & { label: string };
@@ -518,7 +518,8 @@ function IntegrationWorkspace({
   loading,
   error,
   onConnectionsChange,
-  onOpenSearchConsole
+  onOpenSearchConsole,
+  onOpenAnalytics
 }: {
   projectId: string;
   connections: PublicIntegrationConnection[];
@@ -526,6 +527,7 @@ function IntegrationWorkspace({
   error: string;
   onConnectionsChange: (connections: PublicIntegrationConnection[]) => void;
   onOpenSearchConsole: () => void;
+  onOpenAnalytics: () => void;
 }) {
   const [propertiesByProvider, setPropertiesByProvider] = useState<Partial<Record<IntegrationProvider, ExternalProperty[]>>>({});
   const [selectedByProvider, setSelectedByProvider] = useState<Partial<Record<IntegrationProvider, string>>>({});
@@ -669,6 +671,11 @@ function IntegrationWorkspace({
                     {item.provider === "GOOGLE_SEARCH_CONSOLE" && connection?.externalPropertyId ? (
                       <button className={styles.secondary} type="button" onClick={onOpenSearchConsole}>
                         View dashboard
+                      </button>
+                    ) : null}
+                    {item.provider === "GOOGLE_ANALYTICS" && connection?.externalPropertyId ? (
+                      <button className={styles.secondary} type="button" onClick={onOpenAnalytics}>
+                        View analytics
                       </button>
                     ) : null}
                   </div>
@@ -920,6 +927,227 @@ function SearchConsoleReportPanel({
   );
 }
 
+function AnalyticsReportPanel({ projectId, onBack }: { projectId: string; onBack: () => void }) {
+  const [data, setData] = useState<PerformanceDashboard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [activeRange, setActiveRange] = useState("Custom");
+  const [customRangeOpen, setCustomRangeOpen] = useState(false);
+  const [activeView, setActiveView] = useState("Overview");
+
+  const load = useCallback(async (range?: { startDate: string; endDate: string }) => {
+    setLoading(true);
+    setError("");
+    const query = new URLSearchParams({ projectId });
+    if (range) {
+      query.set("startDate", range.startDate);
+      query.set("endDate", range.endDate);
+    }
+    try {
+      const response = await fetch(`/api/performance/analytics?${query.toString()}`, { cache: "no-store" });
+      const payload = await response.json().catch(() => ({})) as PerformanceDashboard & { message?: string };
+      if (!response.ok) throw new Error(payload.message ?? "Could not load Google Analytics data.");
+      setData(payload);
+      setStartDate((current) => current || payload.range.startDate);
+      setEndDate((current) => current || payload.range.endDate);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load Google Analytics data.");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const setPreset = (label: string, days: number) => {
+    const end = data?.range.endDate ?? formatInputDate(new Date());
+    const start = subtractIsoDays(end, days - 1);
+    setActiveRange(label);
+    setCustomRangeOpen(false);
+    setStartDate(start);
+    setEndDate(end);
+    void load({ startDate: start, endDate: end });
+  };
+  const applyCustomRange = () => {
+    if (!startDate || !endDate || startDate > endDate) {
+      setError("Select a valid start and end date.");
+      return;
+    }
+    setActiveRange("Custom");
+    setCustomRangeOpen(false);
+    void load({ startDate, endDate });
+  };
+  const csv = useMemo(() => {
+    if (!data?.trends.length) return "";
+    const headers = Object.keys(data.trends[0]);
+    return [headers.join(","), ...data.trends.map((row) => headers.map((key) => JSON.stringify(row[key] ?? "")).join(","))].join("\n");
+  }, [data]);
+  const tables = data?.tables ?? {};
+  const tableForView: Record<string, string> = {
+    "Landing pages": "Organic landing pages",
+    Acquisition: "Source / medium",
+    Devices: "Device performance",
+    Geography: "Country performance"
+  };
+  const selectedTable = tableForView[activeView] ?? "Organic landing pages";
+  const propertyName = data?.connection?.externalPropertyName ?? data?.connection?.externalPropertyId ?? "Selected GA4 property";
+  const importedRange = data?.connection?.importedStartDate && data.connection?.importedEndDate
+    ? `${data.connection.importedStartDate} to ${data.connection.importedEndDate}`
+    : "No imported data";
+
+  return (
+    <section className={styles.gscConsoleShell}>
+      <aside className={styles.gscConsoleSidebar}>
+        <button className={`${styles.gscPropertySelector} ${activeView === "Property" ? styles.gscConsoleNavActive : ""}`} type="button" onClick={() => setActiveView("Property")}>{propertyName}</button>
+        {["Overview", "Acquisition", "Engagement", "Landing pages", "Devices", "Geography", "Conversions"].map((view) => (
+          <button key={view} className={activeView === view ? styles.gscConsoleNavActive : ""} type="button" onClick={() => setActiveView(view)}>{view}</button>
+        ))}
+        <dl className={styles.gscConsolePropertyMeta}>
+          <div><dt>Account</dt><dd>{data?.connection?.accountEmail ?? "Connected account"}</dd></div>
+          <div><dt>Last sync</dt><dd>{data?.connection?.lastSyncedAt ? formatAuditDate(data.connection.lastSyncedAt) : "Not synced"}</dd></div>
+        </dl>
+      </aside>
+      <div className={styles.gscConsoleMain}>
+        <div className={styles.gscConsoleHeader}>
+          <div><p>Google Analytics 4</p><h2>{activeView}</h2></div>
+          <div className={styles.gscHeaderActions}>
+            <button className={styles.secondary} type="button" onClick={onBack}>Back to integrations</button>
+            <a className={styles.secondary} href={`data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`} download="google-analytics-trends.csv"><Download size={15} /> Export CSV</a>
+          </div>
+        </div>
+        <div className={styles.gscFilterBar}>
+          {["24 hours", "7 days", "28 days"].map((label, index) => <button key={label} className={`${styles.gscRangeChip} ${activeRange === label ? styles.gscRangeChipActive : ""}`} type="button" onClick={() => setPreset(label, [1, 7, 28][index])}>{label}</button>)}
+          <div className={styles.gscCustomPicker}>
+            <button className={`${styles.gscRangeChip} ${activeRange === "Custom" ? styles.gscRangeChipActive : ""}`} type="button" onClick={() => setCustomRangeOpen((open) => !open)}>Custom</button>
+            {customRangeOpen ? <div className={styles.gscCustomRange}><label><span>Start</span><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label><label><span>End</span><input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label><button className={styles.primary} type="button" onClick={applyCustomRange} disabled={loading}>Apply</button></div> : null}
+          </div>
+          <span className={styles.gscFilterMeta}>{data ? `${data.range.startDate} to ${data.range.endDate}` : "Select a date range"}</span>
+        </div>
+        {error ? <p className={styles.integrationError}>{error}</p> : null}
+        {!loading && data && !data.connection ? <p className={styles.integrationHelp}>Connect GA4, select a property, and sync data before viewing analytics.</p> : null}
+        {loading && !data ? <div className={styles.gscSkeletonGrid}>{[1, 2, 3, 4].map((item) => <i key={item} />)}</div> : null}
+        {data && activeView === "Acquisition" ? <AnalyticsAcquisitionPanel projectId={projectId} range={data.range} /> : null}
+        {data && activeView !== "Acquisition" && (activeView === "Overview" || activeView === "Engagement" || activeView === "Conversions") ? (
+          <>
+            <article className={`${styles.card} ${styles.gscChartCard}`}>
+              <div className={styles.gscMetricStrip}>{data.metrics.map((metric, index) => <AnalyticsMetric key={metric.label} metric={metric} active={index < 2} />)}</div>
+              <div className={styles.cardTitle}><div><h2>Analytics graph</h2><p>Daily GA4 users and sessions</p></div><span className={styles.gscChartGranularity}>Daily</span></div>
+              <SearchConsoleChart points={data.trends} primaryKey="activeUsers" secondaryKey="sessions" primaryLabel="active users" secondaryLabel="sessions" />
+            </article>
+            <div className={`${styles.card} ${styles.gscTableLayout}`}><div className={styles.gscTableTabs}>{Object.keys(tables).map((name) => <button key={name} className={selectedTable === name ? styles.gscTableTabActive : ""} type="button" onClick={() => setActiveView(name === "Organic landing pages" ? "Landing pages" : name === "Source / medium" ? "Acquisition" : name === "Device performance" ? "Devices" : "Geography")}>{name}</button>)}</div><SearchConsoleTable title={selectedTable} rows={tables[selectedTable] ?? []} /></div>
+          </>
+        ) : data && activeView !== "Acquisition" ? (
+          <article className={`${styles.card} ${styles.gscConsoleViewCard}`}><div className={styles.cardTitle}><div><h2>{activeView}</h2><p>GA4 property: {propertyName} · Imported range: {importedRange}</p></div></div><SearchConsoleTable title={selectedTable} rows={tables[selectedTable] ?? []} /></article>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function AnalyticsMetric({ metric, active }: { metric: DashboardMetric; active: boolean }) {
+  return <article className={`${styles.gscMetric} ${active ? styles.gscMetricActive : ""}`}><p>{metric.label}</p><strong>{metric.value}</strong></article>;
+}
+
+type AcquisitionData = {
+  range: { startDate: string; endDate: string };
+  channels: string[];
+  trend: Array<Record<string, number | string>>;
+  rows: Array<{ channel: string; landingPage: string; sourceMedium: string; sessions: number; engagedSessions: number; engagementRate: number; averageSessionDuration: number; eventsPerSession: number; eventCount: number; keyEvents: number; sessionKeyEventRate: number; totalRevenue: number }>;
+  totals: { sessions: number; engagedSessions: number; eventCount: number; keyEvents: number; totalRevenue: number };
+  needsResync: boolean;
+};
+
+function AnalyticsAcquisitionPanel({ projectId, range }: { projectId: string; range: { startDate: string; endDate: string } }) {
+  const [data, setData] = useState<AcquisitionData | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const query = new URLSearchParams({ projectId, startDate: range.startDate, endDate: range.endDate });
+    fetch(`/api/performance/analytics/acquisition?${query.toString()}`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.message ?? "Could not load acquisition data.");
+        return payload as AcquisitionData;
+      })
+      .then(setData)
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load acquisition data."));
+  }, [projectId, range.endDate, range.startDate]);
+  if (error) return <p className={styles.integrationError}>{error}</p>;
+  if (!data) return <div className={styles.gscSkeletonGrid}>{[1, 2, 3, 4].map((item) => <i key={item} />)}</div>;
+  return (
+    <section className={styles.acquisitionPanel}>
+      <article className={`${styles.card} ${styles.gscChartCard}`}>
+        <div className={styles.cardTitle}><div><h2>Traffic acquisition</h2><p>Sessions by session primary channel group over time</p></div><span className={styles.gscChartGranularity}>{data.range.startDate} to {data.range.endDate}</span></div>
+        <AcquisitionChart channels={data.channels} points={data.trend} />
+      </article>
+      {data.needsResync ? <p className={styles.integrationHelp}>Landing-page breakdown is available after one more GA4 sync. Click “Sync now” in the integration card to import the additional dimension.</p> : null}
+      <AcquisitionTable rows={data.rows} totals={data.totals} />
+    </section>
+  );
+}
+
+function AcquisitionChart({ channels, points }: { channels: string[]; points: Array<Record<string, number | string>> }) {
+  const colors = ["#D4AF37", "#161616", "#0F766E", "#7C3AED", "#C2410C", "#2563EB"];
+  const [hiddenChannels, setHiddenChannels] = useState<Set<string>>(() => new Set());
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const visibleChannels = channels.filter((channel) => !hiddenChannels.has(channel));
+  const chart = { left: 18, top: 28, width: 684, height: 210, bottom: 238 };
+  const max = Math.max(3, ...points.flatMap((point) => visibleChannels.map((channel) => Number(point[channel] ?? 0))));
+  const activeIndex = hoverIndex ?? Math.max(points.length - 1, 0);
+  const activePoint = points[activeIndex];
+  const activeX = chartX(activeIndex, points.length, chart);
+  const handlePointerMove = (event: MouseEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * 720;
+    const index = Math.round(((x - chart.left) / chart.width) * Math.max(points.length - 1, 1));
+    setHoverIndex(Math.min(Math.max(index, 0), points.length - 1));
+  };
+
+  if (!points.length) return <p className={styles.integrationHelp}>No traffic acquisition rows were imported for this date range.</p>;
+
+  return <div className={styles.gscChartWrap}>
+    <div className={styles.acquisitionLegend}>{channels.map((channel, index) => <button type="button" key={channel} className={hiddenChannels.has(channel) ? styles.acquisitionLegendMuted : undefined} onClick={() => setHiddenChannels((current) => { const next = new Set(current); if (next.has(channel)) next.delete(channel); else next.add(channel); return next; })}><i style={{ background: colors[index % colors.length] }} />{channel}</button>)}</div>
+    <svg className={styles.gscChart} viewBox="0 0 720 300" preserveAspectRatio="none" role="img" aria-label="GA4 traffic acquisition sessions by channel over time" onMouseMove={handlePointerMove} onMouseLeave={() => setHoverIndex(null)}>
+      <rect x="0" y="0" width="720" height="300" rx="18" fill="#fff" />
+      {[0, 1, 2, 3, 4].map((line) => { const y = chart.top + line * (chart.height / 4); return <g key={line}><line x1={chart.left} x2={chart.left + chart.width} y1={y} y2={y} stroke="#ECECEC" /><text x="18" y={y - 6} fill="#9A9A9A" fontSize="10" fontWeight="700">{formatCompactNumber(max * (1 - line / 4))}</text></g>; })}
+      {visibleChannels.map((channel) => { const colorIndex = channels.indexOf(channel); const values = points.map((point) => Number(point[channel] ?? 0)); return <path key={channel} d={linePath(values, max, chart)} fill="none" stroke={colors[colorIndex % colors.length]} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />; })}
+      <line x1={chart.left} x2={chart.left + chart.width} y1={chart.bottom} y2={chart.bottom} stroke="#DADADA" />
+      <line x1={activeX} x2={activeX} y1={chart.top} y2={chart.bottom} stroke="#111111" strokeOpacity="0.14" />
+      {visibleChannels.map((channel) => { const colorIndex = channels.indexOf(channel); return <circle key={channel} cx={activeX} cy={chartY(Number(activePoint?.[channel] ?? 0), max, chart)} r="3" fill="#fff" stroke={colors[colorIndex % colors.length]} strokeWidth="1.7" />; })}
+      <text x={chart.left} y="280" fill="#777" fontSize="12" fontWeight="800">{formatChartDate(String(points[0]?.date ?? ""))}</text><text x={chart.left + chart.width / 2} y="280" textAnchor="middle" fill="#777" fontSize="12" fontWeight="800">{formatChartDate(String(points[Math.floor(points.length / 2)]?.date ?? ""))}</text><text x={chart.left + chart.width} y="280" textAnchor="end" fill="#777" fontSize="12" fontWeight="800">{formatChartDate(String(points[points.length - 1]?.date ?? ""))}</text>
+    </svg>
+    {activePoint ? <div className={styles.gscChartTooltip} style={{ left: `${(activeX / 720) * 100}%`, top: "24%" }}><b>{formatChartDate(String(activePoint.date ?? ""))}</b>{visibleChannels.map((channel) => { const colorIndex = channels.indexOf(channel); return <span key={channel}><i style={{ background: colors[colorIndex % colors.length] }} />{formatCompactNumber(Number(activePoint[channel] ?? 0))} {channel}</span>; })}</div> : null}
+  </div>;
+}
+
+function AcquisitionTable({ rows, totals }: Pick<AcquisitionData, "rows" | "totals">) {
+  type SortKey = "sessions" | "engagedSessions" | "engagementRate" | "averageSessionDuration" | "eventsPerSession" | "eventCount" | "keyEvents" | "totalRevenue";
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("sessions");
+  const [descending, setDescending] = useState(true);
+  const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(1);
+  const filtered = useMemo(() => rows.filter((row) => `${row.channel} ${row.landingPage} ${row.sourceMedium}`.toLowerCase().includes(search.trim().toLowerCase())), [rows, search]);
+  const sorted = useMemo(() => [...filtered].sort((left, right) => (descending ? -1 : 1) * (left[sortKey] - right[sortKey])), [descending, filtered, sortKey]);
+  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const visible = sorted.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const sort = (key: SortKey) => {
+    setPage(1);
+    if (key === sortKey) setDescending((value) => !value);
+    else { setSortKey(key); setDescending(true); }
+  };
+  const header = (label: string, key: SortKey) => <th><button type="button" onClick={() => sort(key)}>{label} {sortKey === key ? (descending ? "↓" : "↑") : "↕"}</button></th>;
+  return <article className={`${styles.card} ${styles.acquisitionTableCard}`}>
+    <div className={styles.cardTitle}><div><h2>Channel and landing-page performance</h2><p>Imported GA4 session acquisition metrics</p></div></div>
+    <div className={styles.acquisitionControls}><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search channel, landing page, source, or medium" /><label>Rows per page <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}><option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="100">100</option><option value="250">250</option></select></label><span>{sorted.length ? `${(safePage - 1) * pageSize + 1}-${Math.min(safePage * pageSize, sorted.length)} of ${sorted.length}` : "0 rows"}</span><button type="button" disabled={safePage <= 1} onClick={() => setPage((value) => value - 1)}>‹</button><button type="button" disabled={safePage >= pageCount} onClick={() => setPage((value) => value + 1)}>›</button></div>
+    <div className={styles.acquisitionTableWrap}><table><thead><tr><th>Session channel group</th><th>Landing page</th>{header("Sessions", "sessions")}{header("Engaged sessions", "engagedSessions")}{header("Engagement rate", "engagementRate")}{header("Avg. engagement", "averageSessionDuration")}{header("Events / session", "eventsPerSession")}{header("Event count", "eventCount")}{header("Key events", "keyEvents")}{header("Revenue", "totalRevenue")}</tr></thead>
+      <tbody><tr className={styles.acquisitionTotal}><td>Total</td><td>All channels</td><td>{totals.sessions}</td><td>{totals.engagedSessions}</td><td>{totals.sessions ? `${((totals.engagedSessions / totals.sessions) * 100).toFixed(2)}%` : "0%"}</td><td>-</td><td>{totals.sessions ? (totals.eventCount / totals.sessions).toFixed(2) : "0"}</td><td>{totals.eventCount}</td><td>{totals.keyEvents}</td><td>{totals.totalRevenue.toFixed(2)}</td></tr>
+      {visible.map((row, index) => <tr key={`${row.channel}-${row.landingPage}-${index}`}><td>{row.channel}</td><td title={row.sourceMedium}>{row.landingPage}</td><td>{row.sessions}</td><td>{row.engagedSessions}</td><td>{(row.engagementRate * 100).toFixed(2)}%</td><td>{Math.round(row.averageSessionDuration)}s</td><td>{row.eventsPerSession.toFixed(2)}</td><td>{row.eventCount}</td><td>{row.keyEvents.toFixed(2)}</td><td>{row.totalRevenue.toFixed(2)}</td></tr>)}</tbody></table></div>
+  </article>;
+}
+
 function SearchConsoleMetric({ metric }: { metric: DashboardMetric }) {
   const active = metric.label === "Total clicks" || metric.label === "Total impressions";
   return (
@@ -930,11 +1158,23 @@ function SearchConsoleMetric({ metric }: { metric: DashboardMetric }) {
   );
 }
 
-function SearchConsoleChart({ points }: { points: Array<Record<string, number | string>> }) {
+function SearchConsoleChart({
+  points,
+  primaryKey = "clicks",
+  secondaryKey = "impressions",
+  primaryLabel = "clicks",
+  secondaryLabel = "impressions"
+}: {
+  points: Array<Record<string, number | string>>;
+  primaryKey?: string;
+  secondaryKey?: string;
+  primaryLabel?: string;
+  secondaryLabel?: string;
+}) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const visible = points;
-  const clicks = visible.map((point) => Number(point.clicks ?? 0));
-  const impressions = visible.map((point) => Number(point.impressions ?? 0));
+  const clicks = visible.map((point) => Number(point[primaryKey] ?? 0));
+  const impressions = visible.map((point) => Number(point[secondaryKey] ?? 0));
   const maxValue = Math.max(...clicks, ...impressions, 3);
   const chart = { left: 18, top: 28, width: 684, height: 210, bottom: 238 };
   const activeIndex = hoverIndex ?? Math.max(visible.length - 1, 0);
@@ -959,7 +1199,7 @@ function SearchConsoleChart({ points }: { points: Array<Record<string, number | 
         className={styles.gscChart}
         viewBox="0 0 720 300"
         preserveAspectRatio="none"
-        aria-label="Google Search Console clicks and impressions graph"
+        aria-label={`Google Analytics ${primaryLabel} and ${secondaryLabel} graph`}
         onMouseMove={handlePointerMove}
         onMouseLeave={() => setHoverIndex(null)}
       >
@@ -991,8 +1231,8 @@ function SearchConsoleChart({ points }: { points: Array<Record<string, number | 
           style={{ left: `${(activeX / 720) * 100}%`, top: `${(Math.min(activeClickY, activeImpressionY) / 300) * 100}%` }}
         >
           <b>{formatChartDate(String(activePoint.date ?? ""))}</b>
-          <span><i className={styles.gscClicks} />{formatCompactNumber(clicks[activeIndex] ?? 0)} clicks</span>
-          <span><i className={styles.gscImpressions} />{formatCompactNumber(impressions[activeIndex] ?? 0)} impressions</span>
+          <span><i className={styles.gscClicks} />{formatCompactNumber(clicks[activeIndex] ?? 0)} {primaryLabel}</span>
+          <span><i className={styles.gscImpressions} />{formatCompactNumber(impressions[activeIndex] ?? 0)} {secondaryLabel}</span>
         </div>
       ) : null}
     </div>
@@ -3200,8 +3440,8 @@ export default function ReportPage() {
 
   const { tabs, aiVisibilityScore, issueCounts, issueTrend, openIssues, priority, nextPriority, auditScores, lastAuditedAt } = derived;
   const auditNav = Object.keys(tabs) as AuditTabId[];
-  const activeAuditTab = active === "overview" || active === "integrations" || active === "searchConsole" || active === "serverStatus" ? null : tabs[active];
-  const focusMode = active === "searchConsole";
+  const activeAuditTab = active === "overview" || active === "integrations" || active === "searchConsole" || active === "analytics" || active === "serverStatus" ? null : tabs[active];
+  const focusMode = active === "searchConsole" || active === "analytics";
   const priorityIssues = priorityIssueGroups(priority);
   const pdfExportUrl = `${API_BASE}/api/reports/${params.id}/export/pdf`;
   const reviewPriority = () => {
@@ -3419,6 +3659,7 @@ export default function ReportPage() {
                 error={integrationsError}
                 onConnectionsChange={setIntegrationConnections}
                 onOpenSearchConsole={() => setActive("searchConsole")}
+                onOpenAnalytics={() => setActive("analytics")}
               />
             ) : active === "searchConsole" ? (
               <SearchConsoleReportPanel
@@ -3428,6 +3669,8 @@ export default function ReportPage() {
                 vitals={report.core_web_vitals}
                 onBack={() => setActive("integrations")}
               />
+            ) : active === "analytics" ? (
+              <AnalyticsReportPanel projectId={params.id} onBack={() => setActive("integrations")} />
             ) : active === "serverStatus" ? (
               <ServerStatusPanel />
             ) : active === "pageSpeed" ? (

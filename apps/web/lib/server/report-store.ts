@@ -111,12 +111,9 @@ async function database() {
 function redactedMongoUri() {
   const uri = process.env.MONGODB_URI;
   if (!uri) return "";
-  try {
-    const parsed = new URL(uri);
-    return `${parsed.protocol}//${parsed.username ? `${parsed.username}:***@` : ""}${parsed.host}${parsed.pathname}`;
-  } catch {
-    return "Invalid URI format";
-  }
+  // Standard Atlas URIs contain a comma-separated host list, which URL cannot
+  // parse as a single host. Redact credentials directly so health remains useful.
+  return uri.replace(/^(mongodb(?:\+srv)?:\/\/)([^:/@]+)(?::[^@]*)?@/, "$1$2:***@");
 }
 
 function memoryFallbackAllowed() {
