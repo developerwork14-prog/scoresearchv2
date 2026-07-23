@@ -1,3 +1,6 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { MongoClient } from "mongodb";
 import type { AiVisibilityReport, CoreWebVitalsSnapshot } from "@aiva/core";
 import { loadServerEnv } from "./env";
@@ -40,17 +43,42 @@ declare global {
   var aivaInsightSubscriptions: InsightSubscription[] | undefined;
   var aivaGoogleSearchConsoleConnections: GoogleSearchConsoleConnection[] | undefined;
   var aivaMongoLastError: string | undefined;
+  var aivaMongoRetryAfter: number | undefined;
 }
 
 const memoryReports = globalThis.aivaMemoryReports ??= new Map<string, AiVisibilityReport>();
 const memoryLeads = globalThis.aivaMemoryLeads ??= [];
 const memorySubscriptions = globalThis.aivaInsightSubscriptions ??= [];
 const memoryGoogleSearchConsoleConnections = globalThis.aivaGoogleSearchConsoleConnections ??= [];
+const localReportsFile = path.join(
+  process.env.AIVA_LOCAL_DATA_DIR ?? path.join(process.env.LOCALAPPDATA ?? os.tmpdir(), "AIVisibilityAnalyzer"),
+  "reports.json"
+);
+
+async function readLocalReports() {
+  try {
+    const reports = JSON.parse(await readFile(localReportsFile, "utf8")) as AiVisibilityReport[];
+    return new Map(reports.map((report) => [report.id, report]));
+  } catch {
+    return new Map<string, AiVisibilityReport>();
+  }
+}
+
+async function saveLocalReport(report: AiVisibilityReport) {
+  if (!memoryFallbackAllowed()) return;
+  const reports = await readLocalReports();
+  reports.set(report.id, report);
+  await mkdir(path.dirname(localReportsFile), { recursive: true });
+  const temporaryFile = `${localReportsFile}.tmp`;
+  await writeFile(temporaryFile, JSON.stringify([...reports.values()]), "utf8");
+  await rename(temporaryFile, localReportsFile);
+}
 
 function mongoClient() {
   loadServerEnv();
   const uri = process.env.MONGODB_URI;
   if (!uri) return null;
+  if (globalThis.aivaMongoRetryAfter && Date.now() < globalThis.aivaMongoRetryAfter) return null;
   if (!uri.startsWith("mongodb://") && !uri.startsWith("mongodb+srv://")) {
     globalThis.aivaMongoLastError = 'MONGODB_URI must start with "mongodb://" or "mongodb+srv://"';
     return null;
@@ -72,6 +100,9 @@ async function database() {
   } catch (error) {
     globalThis.aivaMongoClientPromise = undefined;
     globalThis.aivaMongoLastError = error instanceof Error ? error.message : "Unknown MongoDB connection error";
+    // A failed DNS/network lookup should not hold every report read for the
+    // connection timeout. Retry later while the local development cache serves data.
+    globalThis.aivaMongoRetryAfter = Date.now() + 60_000;
     console.error("MongoDB connection failed", error);
     return null;
   }
@@ -125,6 +156,7 @@ export const reportStore = {
     if (!db) {
       if (!memoryFallbackAllowed()) throw new Error(persistenceUnavailableMessage());
       memoryReports.set(report.id, report);
+      await saveLocalReport(report);
       return report;
     }
 
@@ -145,19 +177,20 @@ export const reportStore = {
       console.error("MongoDB report save failed; using memory fallback", error);
       if (!memoryFallbackAllowed()) throw error;
       memoryReports.set(report.id, report);
+      await saveLocalReport(report);
     }
     return report;
   },
 
   async get(id: string) {
     const db = await database();
-    if (!db) return memoryReports.get(id) ?? null;
+    if (!db) return memoryReports.get(id) ?? (await readLocalReports()).get(id) ?? null;
 
     try {
       return await db.collection<AiVisibilityReport>("reports").findOne({ id }, { projection: { _id: 0 } });
     } catch (error) {
       console.error("MongoDB report read failed; using memory fallback", error);
-      return memoryReports.get(id) ?? null;
+      return memoryReports.get(id) ?? (await readLocalReports()).get(id) ?? null;
     }
   },
 

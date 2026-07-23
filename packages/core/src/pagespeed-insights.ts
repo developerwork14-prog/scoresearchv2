@@ -49,7 +49,9 @@ export interface PageSpeedSnapshot {
   lighthouse?: LighthouseSnapshot;
 }
 
-const PAGESPEED_TIMEOUT_MS = 15000;
+// PageSpeed runs a full Lighthouse analysis remotely. Real sites commonly take
+// longer than 15 seconds, so a short timeout discarded valid keyed results.
+const PAGESPEED_TIMEOUT_MS = 45000;
 const LOCAL_PERFORMANCE_TIMEOUT_MS = 18000;
 
 function apiKey(...names: string[]) {
@@ -255,14 +257,14 @@ export async function fetchPageSpeedInsightsDetailed(url: string, strategy: Page
     } };
   };
 
-  const reasons: string[] = [];
-  const keyed = key ? await parseResponse(endpointFor(true), true) : null;
-  if (keyed?.metrics) return keyed;
-  if (keyed?.unavailableReason) reasons.push(keyed.unavailableReason);
-  const fallback = await parseResponse(endpointFor(false), false);
-  if (fallback.metrics) return fallback;
-  if (fallback.unavailableReason) reasons.push(fallback.unavailableReason);
-  return { metrics: null, unavailableReason: combineReasons(reasons) || "PageSpeed Insights data unavailable." };
+  if (key) {
+    // Do not repeat an expensive Lighthouse run without the key after a keyed
+    // request times out. The public endpoint has the same analysis cost and
+    // only delays the rest of the report.
+    return parseResponse(endpointFor(true), true);
+  }
+
+  return parseResponse(endpointFor(false), false);
 }
 
 export function pageSpeedSnapshot(

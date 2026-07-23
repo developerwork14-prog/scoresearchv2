@@ -427,7 +427,7 @@ const DUPLICATE_CHECK_IDS = new Set([
   59, 60, 63, 64, 65, 72, 73, 74, 75, 76,
   103, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 125, 126, 127, 128, 129, 130, 131,
   133, 134, 135, 136, 137, 138, 141, 142,
-  148, 159, 162, 164, 165, 166, 178, 181
+  148, 159, 162, 164, 165, 166, 178, 181, 246
 ]);
 
 const GENERIC_ANCHORS = new Set(["click here", "read more", "here", "learn more", "link", "this"]);
@@ -740,7 +740,7 @@ export async function validateBrokenLink(url: string, timeoutMs = 8000, maxRedir
       } catch {
         // A single timeout or connection reset is not sufficient evidence. Confirm it once
         // with a fresh request and a larger per-hop budget before classifying the URL.
-        response = await fetchBrokenLinkHop(currentUrl, Math.max(timeoutMs * 2, 12000));
+        response = await fetchBrokenLinkHop(currentUrl, Math.max(timeoutMs * 2, 4000));
       }
       const location = response.headers.get("location");
       if (BROKEN_LINK_REDIRECT_STATUSES.has(response.status) && location && redirectHops < maxRedirects) {
@@ -3040,7 +3040,7 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
   // exceed the report-level timeout and discard otherwise usable audit data.
   const externalLinkRefs = pages.flatMap((p) => extractExternalLinks(p, new URL(p.finalUrl))).slice(0, 100);
   const externalLinkTargets = [...new Set(externalLinkRefs.map((link) => link.url))];
-  const internalLinkTargets = [...new Set(allInternalLinks.map((link) => link.href))].slice(0, 100);
+  const internalLinkTargets = [...new Set(allInternalLinks.map((link) => link.href))].slice(0, 40);
   const trackingInternalLinks = findTrackingInternalLinks(allInternalLinks);
   const searchLinks = internalSearchLinks(allInternalLinks);
   const fakeUrl = `${origin}/__audit-soft-404-test-${Date.now()}`;
@@ -3060,7 +3060,7 @@ export async function runTechnicalAudit(inputUrl: string, siteCrawl?: SiteCrawlR
     sampleAssets(textAssetRefs, 24, false, { headers: { "accept-encoding": "br, gzip, deflate" } }),
     sampleAssets(sampleableAssetRefs, 28, false),
     sampleAssets(assetRefs.filter((asset) => asset.kind === "js"), 12, true),
-    mapWithConcurrency(internalLinkTargets, 16, (href) => validateBrokenLink(href, 8000, 5)),
+    mapWithConcurrency(internalLinkTargets, 12, (href) => validateBrokenLink(href, 2500, 3)),
     mapWithConcurrency(externalLinkTargets, 16, (href) => validateBrokenLink(href, 2200)),
     fetchText(fakeUrl, {}, 2400).catch(() => null),
     Promise.all(["/feed", "/rss", "/atom.xml"].map(async (path) => ({ url: `${origin}${path}`, result: await fetchText(`${origin}${path}`, {}, 2200).catch(() => null) }))),

@@ -146,7 +146,6 @@ const ENTITY_SEO_CATEGORIES = [
 const PAGE_SPEED_CATEGORIES = [
   "Core Web Vitals",
   "PageSpeed Scores",
-  "Performance",
   "Performance & Caching",
   "TTFB & Server Response",
   "Asset Optimisation"
@@ -1388,10 +1387,12 @@ function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: Struct
   const renderBlockingCheck = findCheck(checks, "render-blocking");
   const preloadCheck = findCheck(checks, "Preload Critical Resources", "LCP image preloaded");
   const lazyCheck = findCheck(checks, "Below-Fold Images Lazy-Loaded", "lazy");
-  const hasPageSpeedEvidence = [mobileScore, desktopScore, lcp, inp, cls, fcp, ttfb, speedIndex].some((value) => value !== undefined && Number.isFinite(value));
-  const source = vitals?.source ?? (hasPageSpeedEvidence ? "PageSpeed Insights" : vitals?.ttfb !== undefined ? "Crawl Timing" : "PageSpeed Insights");
-  const score = mobileScore !== undefined ? clampScore(mobileScore) : tab.available ? tab.score : undefined;
-  const pageSpeedUnavailable = !hasPageSpeedEvidence || source === "Crawl Timing";
+  // Crawler TTFB is useful server timing, but it is not Lighthouse/PageSpeed data and
+  // must never create a synthetic PageSpeed score for a report with no lab metrics.
+  const hasLabMetrics = [mobileScore, desktopScore, lcp, inp, cls, fcp, speedIndex].some((value) => value !== undefined && Number.isFinite(value));
+  const source = vitals?.source ?? (hasLabMetrics ? "PageSpeed Insights" : vitals?.ttfb !== undefined ? "Crawl Timing" : "PageSpeed Insights");
+  const pageSpeedUnavailable = !hasLabMetrics || source === "Crawl Timing";
+  const score = pageSpeedUnavailable ? undefined : mobileScore !== undefined ? clampScore(mobileScore) : tab.available ? tab.score : undefined;
 
   const metricRows = [
     { label: "LCP", detail: "Largest Contentful Paint", value: formatMs(lcp), status: pageSpeedMetricStatus(lcp, 2500) },
@@ -1417,10 +1418,12 @@ function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: Struct
   const pageSpeedSections = pageSpeedInsightSections(checks);
   const lighthouseCategories = vitals?.lighthouse?.categories ?? [];
   const lighthousePerformance = lighthouseCategories.find((category) => category.id === "performance");
-  const actualInsights = lighthousePerformance ? lighthousePerformance.insights.map(lighthouseInsightRow) : pageSpeedSections.insights;
-  const actualDiagnostics = lighthousePerformance ? lighthousePerformance.diagnostics.map(lighthouseInsightRow) : pageSpeedSections.diagnostics;
-  const actualPassed = lighthousePerformance ? lighthousePerformance.passed.map(lighthouseInsightRow) : pageSpeedSections.passed;
-  const actualSkipped = lighthousePerformance ? [...lighthousePerformance.notApplicable, ...lighthousePerformance.manual].map(lighthouseInsightRow) : pageSpeedSections.skipped;
+  // Do not label crawler heuristics as Lighthouse opportunities when PSI/local
+  // Lighthouse was unavailable. Server and asset checks remain visible below.
+  const actualInsights = pageSpeedUnavailable ? [] : lighthousePerformance ? lighthousePerformance.insights.map(lighthouseInsightRow) : pageSpeedSections.insights;
+  const actualDiagnostics = pageSpeedUnavailable ? [] : lighthousePerformance ? lighthousePerformance.diagnostics.map(lighthouseInsightRow) : pageSpeedSections.diagnostics;
+  const actualPassed = pageSpeedUnavailable ? [] : lighthousePerformance ? lighthousePerformance.passed.map(lighthouseInsightRow) : pageSpeedSections.passed;
+  const actualSkipped = pageSpeedUnavailable ? [] : lighthousePerformance ? [...lighthousePerformance.notApplicable, ...lighthousePerformance.manual].map(lighthouseInsightRow) : pageSpeedSections.skipped;
   const topInsights = [...actualInsights, ...actualDiagnostics].slice(0, 4);
   const rolePriorities = pageSpeedRolePriorities([...actualInsights, ...actualDiagnostics], metricRows, serverRows);
 
@@ -1558,7 +1561,10 @@ function PageSpeedOverviewPanel({ tab, vitals }: { tab: TabInfo; vitals?: Struct
         </article>
       </div>
 
-      {tab.available ? <AuditDetailPanel tab={tab} /> : null}
+      {/* A generic category score is not a PageSpeed score. When lab data is
+          unavailable, keep the crawler timing panel and do not render the
+          duplicate detail workspace that would show a misleading percentage. */}
+      {tab.available && !pageSpeedUnavailable ? <AuditDetailPanel tab={tab} /> : null}
     </section>
   );
 }
@@ -1611,8 +1617,8 @@ function lighthouseInsightRow(audit: StoredLighthouseAudit): PageSpeedInsightRow
 
 function pageSpeedInsightRow(check: CheckLike): PageSpeedInsightRow & { kind: "insight" | "diagnostic" | "passed" | "skipped" } {
   const status = pageSpeedCheckStatus(check);
-  const passed = Boolean(check.passed) && !check.warning;
   const skipped = Boolean(check.skipped || check.notApplicable);
+  const passed = Boolean(check.passed) && !check.warning && !skipped;
   const title = pageSpeedTitle(check.name ?? "PageSpeed audit");
   const text = readableEvidence(check.evidence);
   const description = check.issueSummary || check.whatIsWrong || pageSpeedDescription(title, text);

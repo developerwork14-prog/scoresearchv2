@@ -641,7 +641,7 @@ export async function generateVisibilityReport(input: ReportInput, origin = "htt
     };
     return withAuditTimeout(
     runTechnicalAudit(normalizedUrl, technicalSample),
-    90000,
+    150000,
     () => fallbackTechnicalAudit("Technical audit timed out", technicalSample),
     "Technical audit"
   );
