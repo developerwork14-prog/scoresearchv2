@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { AlertTriangle, BarChart3, CheckCircle2, Download, ExternalLink, Loader2, Plug, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 import { Button, Card, Input } from "@/components/ui";
 import type { CombinedInsight, DashboardTableRow, ExternalProperty, IntegrationProvider, PerformanceDashboard, PublicIntegrationConnection, SyncLog } from "@/lib/server/integrations/types";
@@ -252,12 +251,17 @@ function ProviderCard({ provider, connection, loading, detailed = false, onSync,
 }
 
 export function PerformancePage({ endpoint, title, description }: { endpoint: string; title: string; description: string }) {
-  const searchParams = useSearchParams();
-  const projectId = searchParams.get("projectId");
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [queryReady, setQueryReady] = useState(false);
   const [data, setData] = useState<PerformanceDashboard>();
   const [error, setError] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+
+  useEffect(() => {
+    setProjectId(new URLSearchParams(window.location.search).get("projectId"));
+    setQueryReady(true);
+  }, []);
 
   const load = useCallback(async () => {
     setError("");
@@ -277,8 +281,8 @@ export function PerformancePage({ endpoint, title, description }: { endpoint: st
   }, [endpoint, projectId, startDate, endDate]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (queryReady) void load();
+  }, [load, queryReady]);
 
   const csv = useMemo(() => {
     if (!data?.trends) return "";
